@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=45", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "btqa-game"
+version = "0.1.0"
+description = "BT-QA Game SDK: 게임을 BT 밸런스 QA 학습 플랫폼에 붙이는 키트 (프로토콜 1.3, 학습 대상 = 블록 가중치뿐)"
+readme = "README.md"
+requires-python = ">=3.8"
+dependencies = []          # 표준 라이브러리만
+authors = [{ name = "jk96491" }]
+keywords = ["qa", "game-balance", "behavior-tree", "reinforcement-learning"]
+
+[project.scripts]
+btqa-game = "btqa_game.__main__:main"
+
+[tool.setuptools]
+package-dir = { "" = "python" }
+
+[tool.setuptools.packages.find]
+where = ["python"]
+include = ["btqa_game*"]
