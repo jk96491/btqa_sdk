@@ -31,6 +31,7 @@ class EpisodeRequest:
     thresholds: List[float]           # 요청한 트리거 경계 (없으면 빈 목록 = 트리거 없음)
     record_events: bool = False
     raw: Optional[Mapping[str, Any]] = None
+    initial_state: Optional[Dict[str, float]] = None   # v1.4: 선언 전체(default + 요청, 검증 완료). None = 요청 없음 (1.3 과 같은 시작)
 
     @property
     def class_name(self) -> str:

@@ -66,6 +66,7 @@ class ProbeClient:
         scenario: str = "base",
         triggers: Optional[Tuple[str, Sequence[float]]] = None,
         on_trigger: Optional[Callable[[Dict[str, Any]], Mapping[str, Any]]] = None,
+        initial_state: Optional[Mapping[str, Any]] = None,
     ) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
         """→ (result, 받은 trigger 메시지들)."""
         eid = "%s#check%d" % (self.name, next(_ids))
@@ -73,6 +74,8 @@ class ProbeClient:
                                "seed": int(seed), "params": dict(params or {})}
         if triggers:
             msg["triggers"] = {triggers[0]: list(triggers[1])}
+        if initial_state is not None:
+            msg["initial_state"] = dict(initial_state)
         self.send(msg)
         seen: List[Dict[str, Any]] = []
         while True:
@@ -151,6 +154,13 @@ def description_problems(d: Mapping[str, Any]) -> List[str]:
         wrong = [n for n, p in params.items() if bool(p.get("optimize", p.get("group", "bt") == "bt")) != (n in weights)]
         if wrong:
             out.append("%s: optimize 는 블록 가중치에만 true 여야 함: %s" % (c["name"], wrong))
+    feats = d["triggers"].get("state_features") or []
+    for s in d.get("initial_state") or []:
+        lo, hi = s.get("range", [None, None])
+        if s.get("name") not in feats:
+            out.append("initial_state.%s: triggers.state_features 에 없음" % s.get("name"))
+        if not (isinstance(lo, (int, float)) and isinstance(hi, (int, float)) and 0 <= lo < hi <= 1 and lo <= s.get("default", -1) <= hi):
+            out.append("initial_state.%s: range [0,1] 안·default 는 range 안" % s.get("name"))
     return out
 
 
@@ -308,6 +318,47 @@ class Conformance:
         self._check("unknown_class 오류", lambda: self._expect_error(P.E_UNKNOWN_CLASS, cls="__no_such_class__", seed=1))
         self._check("unknown_scenario 오류", lambda: self._expect_error(P.E_UNKNOWN_SCENARIO, cls=cls, seed=1, scenario="__no_such_scenario__"))
         self._check("오류 후 연결 유지", lambda: (c.run_episode(cls, 2), "오류 후에도 같은 연결로 계속 사용 가능")[1])
+
+        init = d.get("initial_state") or []
+        if init:
+            full = {s["name"]: s["default"] for s in init}
+            low = {s["name"]: s["range"][0] for s in init}
+
+            def init_default() -> str:
+                a, _ = c.run_episode(cls, CHECK_SEED, defaults)
+                b, _ = c.run_episode(cls, CHECK_SEED, defaults, initial_state=full)
+                assert a == b, "initial_state = 선언 default 이면 생략한 판과 같은 결과여야 함"
+                return "ok"
+
+            def init_determinism() -> str:
+                a, _ = c.run_episode(cls, CHECK_SEED + 4, defaults, initial_state=low)
+                b, _ = c.run_episode(cls, CHECK_SEED + 4, defaults, initial_state=low)
+                assert a == b, "같은 seed·params·initial_state 인데 결과가 다름"
+                return "동일"
+
+            def init_applied() -> str:
+                _, seen = c.run_episode(cls, CHECK_SEED + 5, initial_state=low, triggers=(ttype, thresholds))
+                st = seen[0].get("state") or {}
+                off = {k: (st.get(k), v) for k, v in low.items() if st.get(k) is None or abs(float(st[k]) - v) > 0.02}
+                assert not off, "trigger index 0 state 가 initial_state 와 다름 (state, 요청): %s" % off
+                return "index 0 state = %s" % {k: st.get(k) for k in low}
+
+            def init_errors() -> str:
+                self._expect_error(P.E_UNKNOWN_PARAM, cls=cls, seed=1, initial_state={"__no_such_state__": 0.5})
+                s0 = init[0]
+                self._expect_error(P.E_PARAM_OUT_OF_RANGE, cls=cls, seed=1, initial_state={s0["name"]: s0["range"][1] + 1.0})
+                self._expect_error(P.E_BAD_REQUEST, cls=cls, seed=1, initial_state={s0["name"]: "full"})
+                return "unknown_param / param_out_of_range / bad_request"
+
+            self._check("initial_state = default → 생략과 같은 결과 (v1.4)", init_default)
+            self._check("initial_state 결정성 (v1.4)", init_determinism)
+            self._check("initial_state 가 트리거 0 state 에 반영 (v1.4)", init_applied, required=False)
+            self._check("initial_state 오류 코드 (v1.4)", init_errors)
+        else:
+            def init_refused() -> str:
+                return self._expect_error(P.E_UNKNOWN_PARAM, cls=cls, seed=1, initial_state={"hp_ratio": 0.5})
+
+            self._check("initial_state 미선언 → 요청 거부 unknown_param (v1.4)", init_refused, required=_minor(d["protocol_version"]) >= 4)
 
         def scenarios() -> str:
             names = [s["name"] if isinstance(s, dict) else s for s in d["scenarios"]]

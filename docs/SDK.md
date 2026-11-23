@@ -1,7 +1,7 @@
 # BT-QA Game SDK 가이드
 
 > 한 줄: **게임은 BT 를 설계하고 블록 가중치를 선언한다. 학습 플랫폼은 그 가중치만 학습해 돌려준다.**
-> 계약 [`PROTOCOL.md`](PROTOCOL.md) v1.3. SDK 0.1.0.
+> 계약 [`PROTOCOL.md`](PROTOCOL.md) v1.4. SDK 0.2.0.
 
 ## 1. 구성
 
@@ -14,7 +14,7 @@
 ```
 ┌──────────── 게임 ─────────────┐                 ┌──── 학습 플랫폼 (이 SDK 밖) ────┐
 │ 게임 로직 (전투, BT)            │                 │ 최적화·RL (CMA-ES, IMPALA ...)  │
-│   └ IEpisodeHost 구현 ◀─ 게임   │ ◀── TCP 1.3 ──▶ │   학습 대상 = 선언된 블록 가중치 │
+│   └ IEpisodeHost 구현 ◀─ 게임   │ ◀── TCP 1.4 ──▶ │   학습 대상 = 선언된 블록 가중치 │
 │ BT-QA Game SDK                 │                 │   페르소나 = 가중치가 아닌 설정값 │
 │   QaServer·QaSession·GameDecl  │                 │                                 │
 └────────────────────────────────┘                 └─────────────────────────────────┘
@@ -106,6 +106,17 @@ QaGameServer(MyHost, port=7777).serve_forever()
 
 전체 예제: `python/btqa_game/examples/minimal_arena.py` — `python -m btqa_game example --port 7777` 로 띄우고 `check` 로 검사.
 
+### 4.1 판 시작 상태 (v1.4, 선택)
+
+학습 쪽이 판 시작 상황(체력·물약)을 바꿔 가며 학습하려면 받을 수 있는 시작 상태를 선언한다. 이름은 `triggers.state_features` 중 하나.
+
+```python
+GameDecl(..., initial_state=(InitialStateDecl("hp_ratio", 0.05, 1.0, 1.0, "판 시작 체력"),
+                             InitialStateDecl("potions_ratio", 0.0, 1.0, 1.0, "물약 = round(비율 × 직업 물약 수)")))
+# run_episode 에서: req.initial_state 가 None 이면 지금처럼 가득 찬 상태, 아니면 {"hp_ratio": 0.7, "potions_ratio": 0.34} (default 포함)
+```
+Unity: `decl.InitialState.Add(new InitialStateDecl("hp_ratio", 0.05, 1.0, 1.0, "..."))`, 판에서 `request.InitialState` (null = 요청 없음). 검증(모르는 키·범위)은 SDK 가 한다.
+
 ## 5. 결정성 (가장 중요)
 
 같은 `(class, scenario, seed, params, 트리거 응답 순서)` → 완전히 같은 result. SDK 는 이걸 대신 보장할 수 없다 — 게임이 지킨다.
@@ -115,8 +126,8 @@ QaGameServer(MyHost, port=7777).serve_forever()
 
 | 구성 | 버전 |
 |---|---|
-| 프로토콜 | 1.3 (같은 주 버전 1.x 끼리 호환) |
-| `com.btqa.game` / `btqa_game` | 0.1.0 (둘은 항상 같은 버전으로 올린다 — `tests/test_sdk.py` 가 검사) |
+| 프로토콜 | 1.4 (같은 주 버전 1.x 끼리 호환) |
+| `com.btqa.game` / `btqa_game` | 0.2.0 (둘은 항상 같은 버전으로 올린다 — `tests/test_sdk.py` 가 검사) |
 
 프로토콜을 바꾸면 `docs/PROTOCOL.md` → `python/btqa_game` → `unity/com.btqa.game/Runtime` → `btqa_game.conformance` 를 같이 맞추고 `CHANGELOG.md` 에 적는다.
 

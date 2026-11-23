@@ -38,6 +38,7 @@ namespace Btqa.Game
             var thresholds = TriggerChannel.ParseThresholds(msg["triggers"], Decl.Triggers.Type);
             var po = ps as JObject;
             cls.CheckUpdates(po);
+            var init = Decl.ResolveInitialState(msg["initial_state"]);
             return new EpisodeRequest
             {
                 EpisodeId = msg["episode_id"],
@@ -49,6 +50,7 @@ namespace Btqa.Game
                 Thresholds = thresholds,
                 RecordEvents = msg["record_events"]?.Type == JTokenType.Boolean && (bool)msg["record_events"],
                 Raw = msg,
+                InitialState = init,
             };
         }
 

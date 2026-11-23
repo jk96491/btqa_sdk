@@ -21,6 +21,7 @@ from btqa_game import (
     EpisodeHost,
     EpisodeRequest,
     GameDecl,
+    InitialStateDecl,
     ParamDecl,
     ScenarioDecl,
     TriggerChannel,
@@ -54,6 +55,8 @@ class MinimalArena(EpisodeHost):
             decision_interval=1.0, classes=(duelist,),
             scenarios=tuple(ScenarioDecl(n) for n in SCENARIOS),
             triggers=TriggerDecl("enemy_hp_below", (0.66, 0.33), STATE, TOTALS),
+            initial_state=(InitialStateDecl("hp_ratio", 0.05, 1.0, 1.0, "판 시작 체력"),
+                           InitialStateDecl("potions_ratio", 0.0, 1.0, 1.0, "판 시작 물약 (×3, 반올림)")),
         )
 
     def run_episode(self, req: EpisodeRequest, triggers: TriggerChannel) -> Dict[str, Any]:
@@ -61,6 +64,9 @@ class MinimalArena(EpisodeHost):
         p = dict(req.params)
         enemy_max = 1000.0 * SCENARIOS[req.scenario]
         hp, enemy, potions, deaths, used = 1.0, enemy_max, 3, 0, 0
+        if req.initial_state is not None:          # v1.4 판 시작 상태
+            hp = req.initial_state["hp_ratio"]
+            potions = int(req.initial_state["potions_ratio"] * 3 + 0.5)
         t, last_hit, fired = 0.0, 0.0, 0
         pending = sorted(req.thresholds, reverse=True)
 

@@ -13,6 +13,7 @@ from btqa_game.declaration import (
     ClassDecl,
     DeclarationError,
     GameDecl,
+    InitialStateDecl,
     ParamDecl,
     ScenarioDecl,
     TriggerDecl,
@@ -22,11 +23,11 @@ from btqa_game.protocol import PROTOCOL_VERSION, ProtocolError
 from btqa_game.server import QaGameServer
 from btqa_game.session import GameSession
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 __all__ = [
     "PROTOCOL_VERSION", "ProtocolError",
     "GROUP_BT", "GROUP_PERSONA", "WEIGHT_UNIT",
-    "ParamDecl", "BlockDecl", "ClassDecl", "TriggerDecl", "ScenarioDecl", "GameDecl", "DeclarationError",
+    "ParamDecl", "BlockDecl", "ClassDecl", "TriggerDecl", "ScenarioDecl", "InitialStateDecl", "GameDecl", "DeclarationError",
     "EpisodeHost", "EpisodeRequest", "TriggerChannel", "GameSession", "QaGameServer",
 ]

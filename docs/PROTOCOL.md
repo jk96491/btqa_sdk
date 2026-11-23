@@ -1,6 +1,8 @@
-# 게임 ↔ 학습 플랫폼 프로토콜 v1.3
+# 게임 ↔ 학습 플랫폼 프로토콜 v1.4
 
-> 변경 이력: **1.3** — `classes[].blocks` (전략 선택 노드의 블록 → 가중치 파라미터) 추가. **학습 대상 = 블록 가중치뿐** (4.2.1).
+> 변경 이력: **1.4** — `run_episode.initial_state` (판 시작 상태: 체력·자원·물약 비율 등)와 그 선언 `describe.initial_state` 추가 (4.3.1).
+> 학습 쪽 컨텍스트 밴딧(판 시작 상황마다 다른 블록 가중치)용. 생략하면 1.3 과 같은 판. 1.x 와 호환.
+> **1.3** — `classes[].blocks` (전략 선택 노드의 블록 → 가중치 파라미터) 추가. **학습 대상 = 블록 가중치뿐** (4.2.1).
 > `run_episode.triggers` 의 키 = `describe.triggers.type`. 1.x 와 호환 (1.2 이하 게임은 학습 쪽이 `unit: "weight"` 로 가중치를 추정).
 > **1.2** — `result.stalled`, `result.stall_reason` 추가. 멈춘 판은 `invalid` 가 아니라 **실패 판**(4.5). 1.x 와 호환.
 > **1.1** — `trigger.totals`(판 시작부터의 누적값)와 `describe.triggers.totals` 추가. IMPALA 구간 보상에 필요. 1.0 과 호환(같은 주 버전).
@@ -104,6 +106,10 @@ BT-QA Game SDK — Python `python/btqa_game`, Unity 패키지 `unity/com.btqa.ga
     "state_features": ["hp_ratio","boss_hp_ratio","potions_ratio","resource_ratio","burst_ready","time_ratio","deaths_ratio"],
     "totals": ["elapsed","deaths","consumables_used","boss_hp_remaining"]
   },
+  "initial_state": [
+    {"name":"hp_ratio","range":[0.05,1.0],"default":1.0,"description":"판 시작 체력"},
+    {"name":"potions_ratio","range":[0.0,1.0],"default":1.0,"description":"판 시작 물약 / 직업 물약 수"}
+  ],
   "result_fields": ["seed","cleared", "..."]
 }
 ```
@@ -120,6 +126,7 @@ BT-QA Game SDK — Python `python/btqa_game`, Unity 패키지 `unity/com.btqa.ga
 | `triggers.state_features` | O | 트리거 상태 키 순서. **정책 신경망 입력 순서**가 된다 |
 | `triggers.supported` | | 기본 트리거 경계 (보스 체력 비율) |
 | `triggers.totals` | v1.1 | `trigger.totals` 로 보내는 누적값 키. `elapsed`, `deaths`, `consumables_used` 가 있어야 IMPALA 학습 가능 |
+| `initial_state[]` | v1.4 | `run_episode.initial_state` 로 받을 수 있는 판 시작 상태. `name` = `triggers.state_features` 중 하나(같은 뜻의 0~1 비율), `range` ⊂ [0,1], `default` = 생략했을 때 시작값. 없으면 게임은 `initial_state` 를 받지 않는다 (4.3.1) |
 
 이름은 학습 쪽에 하드코딩되어 있지 않다. 학습 대상 가중치는 `blocks`, 페르소나 설정값은 `qa_specs/personas.json` 이 이름으로 가리킨다
 (현재 페르소나는 `survival_hp_threshold`, `dps_hp_floor` 를 씀 — 이 두 이름이 없는 게임에는 페르소나 파일을 맞춘다).
@@ -163,6 +170,20 @@ BT-QA Game SDK — Python `python/btqa_game`, Unity 패키지 `unity/com.btqa.ga
 | `params` | | 생략한 파라미터는 정의서 `default`. 모르는 이름 → `error(unknown_param)`, 범위 밖 → `error(param_out_of_range)` |
 | `triggers` | | `{<describe.triggers.type>: [경계...]}`. 없거나 비어 있으면 트리거 없이 판 끝까지 실행 |
 | `record_events` | | true 면 `result.events` 포함 (리플레이·디버깅) |
+| `initial_state` | v1.4 | `{<describe.initial_state[].name>: 값}` 판 시작 상태 (4.3.1). 생략·빈 객체 = 1.3 과 같은 판 |
+
+#### 4.3.1 `initial_state` (v1.4)
+
+```json
+{"type":"run_episode","episode_id":"e1","class":"warrior","scenario":"forest_wolf_king","seed":7,
+ "params":{"w_dps":0.8},"initial_state":{"hp_ratio":0.7,"potions_ratio":0.34}}
+```
+- 판을 이 상태로 시작한다. 생략한 키 = 선언 `default`. 비율을 개수로 바꾸는 규칙(예: 물약 `round(비율 × 직업 물약 수)`, 반올림 0.5 올림)은 게임이 정하고 `description` 에 적는다.
+- 트리거 index 0 의 `state` 에 같은 값이 보여야 한다 (개수로 반올림한 결과 기준).
+- 검증: 선언에 없는 키 → `error(unknown_param)`, 범위 밖 → `error(param_out_of_range)`, 숫자 아님·객체 아님 → `error(bad_request)`.
+- **선언(`describe.initial_state`)하지 않은 게임에는 보내지 않는다.** 1.3 이하 게임은 모르는 요청 필드를 무시하므로(8장) 보내도 아무 효과 없이 full 로 시작한다 — 학습 쪽은 선언을 보고 판단한다. SDK 1.4 게임은 선언이 없으면 `unknown_param` 으로 거부한다.
+- 결정성: 같은 `(class, scenario, seed, params, initial_state, 트리거 응답)` → 같은 result. `initial_state` 생략 판은 1.3 과 **완전히 같은 result**.
+- 용도: 학습 쪽이 판 시작 상황(체력·물약)을 다양하게 해서, 상황마다 다른 블록 가중치를 고르는 정책(컨텍스트 밴딧)을 학습한다. 플레이 모드 필드 전투(`PLAY_PROTOCOL.md` 4.7 `combat_started.potions`·`field_state`)와 같은 뜻.
 
 ### 4.4 `trigger` / `trigger_response`
 
@@ -249,7 +270,7 @@ BT-QA Game SDK — Python `python/btqa_game`, Unity 패키지 `unity/com.btqa.ga
 
 ## 6. 결정성 요구사항 (가장 중요)
 
-같은 `(class, scenario, seed, params, 트리거 응답 순서)` → **완전히 같은 `result`**.
+같은 `(class, scenario, seed, params, initial_state, 트리거 응답 순서)` → **완전히 같은 `result`**.
 이게 깨지면 최적화가 노이즈를 학습하고, 직업 간 비교가 무의미해진다.
 
 Unity 구현 시:

@@ -8,7 +8,8 @@ import json
 from typing import Any, Dict
 
 #: 1.1 trigger.totals / 1.2 result.stalled / 1.3 classes[].blocks (학습 대상 = 블록 가중치)
-PROTOCOL_VERSION = "1.3"
+#: 1.4 run_episode.initial_state (판 시작 상태, describe.initial_state 로 선언)
+PROTOCOL_VERSION = "1.4"
 
 # 학습 → 게임
 HELLO = "hello"

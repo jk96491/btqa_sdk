@@ -178,6 +178,27 @@ class TriggerDecl:
 
 
 @dataclass(frozen=True)
+class InitialStateDecl:
+    """v1.4 `run_episode.initial_state` 로 받을 수 있는 판 시작 상태 1개.
+
+    이름은 `triggers.state_features` 중 하나 (0~1 비율, 예: hp_ratio, potions_ratio) — 트리거 state 와 같은 뜻.
+    생략한 키 = default (보통 1.0 = 가득). `initial_state` 를 아예 안 보낸 판은 1.3 과 같은 결과여야 한다.
+    """
+
+    name: str
+    low: float = 0.0
+    high: float = 1.0
+    default: float = 1.0
+    description: str = ""
+
+    def contains(self, value: float, tol: float = 1e-9) -> bool:
+        return self.low - tol <= value <= self.high + tol
+
+    def to_wire(self) -> Dict[str, Any]:
+        return {"name": self.name, "range": [self.low, self.high], "default": self.default, "description": self.description}
+
+
+@dataclass(frozen=True)
 class ScenarioDecl:
     name: str
     description: str = ""
@@ -195,6 +216,7 @@ class GameDecl:
     decision_interval: float = 0.0
     result_fields: Tuple[str, ...] = ()
     extra: Dict[str, Any] = field(default_factory=dict)   # 게임 고유 추가 필드 (학습 쪽은 모르는 필드를 무시)
+    initial_state: Tuple[InitialStateDecl, ...] = ()      # v1.4: 받을 수 있는 판 시작 상태 (없으면 initial_state 요청 거부)
 
     def class_decl(self, name: Any) -> Optional[ClassDecl]:
         for c in self.classes:
@@ -217,6 +239,33 @@ class GameDecl:
             out.append("triggers.type 필요")
         if not self.triggers.state_features:
             out.append("triggers.state_features 비어 있음")
+        names = [s.name for s in self.initial_state]
+        if len(set(names)) != len(names):
+            out.append("initial_state 이름 중복")
+        for s in self.initial_state:
+            if s.name not in self.triggers.state_features:
+                out.append("initial_state.%s: triggers.state_features 에 없는 이름 (같은 뜻의 0~1 비율이어야 함)" % s.name)
+            if not (0.0 <= s.low < s.high <= 1.0 and s.low <= s.default <= s.high):
+                out.append("initial_state.%s: range 는 [0,1] 안, low < high, default 는 range 안" % s.name)
+        return out
+
+    def resolve_initial_state(self, value: Any) -> Optional[Dict[str, float]]:
+        """run_episode.initial_state 검증 → 선언 전체(default + 요청). 없거나 빈 객체면 None (= 1.3 과 같은 시작)."""
+        if value is None or value == {}:
+            return None
+        if not isinstance(value, dict):
+            raise P.ProtocolError(P.E_BAD_REQUEST, "initial_state 는 객체여야 함")
+        decls = {s.name: s for s in self.initial_state}
+        out = {s.name: s.default for s in self.initial_state}
+        for name, v in value.items():
+            s = decls.get(name)
+            if s is None:
+                raise P.ProtocolError(P.E_UNKNOWN_PARAM, "initial_state 에 %r 없음 (선언: %s)" % (name, sorted(decls) or "없음"))
+            if isinstance(v, bool) or not isinstance(v, (int, float)):
+                raise P.ProtocolError(P.E_BAD_REQUEST, "initial_state.%s 값이 숫자가 아님: %r" % (name, v))
+            if not s.contains(float(v)):
+                raise P.ProtocolError(P.E_PARAM_OUT_OF_RANGE, "initial_state.%s=%g 가 범위 [%g, %g] 밖" % (name, v, s.low, s.high))
+            out[name] = float(v)
         return out
 
     def validate(self) -> "GameDecl":
@@ -240,6 +289,8 @@ class GameDecl:
         }
         if self.result_fields:
             d["result_fields"] = list(self.result_fields)
+        if self.initial_state:
+            d["initial_state"] = [s.to_wire() for s in self.initial_state]
         for k, v in self.extra.items():
             d.setdefault(k, v)
         return d

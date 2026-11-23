@@ -51,6 +51,7 @@ class GameSession:
             thresholds=self.parse_triggers(msg.get("triggers")),
             record_events=bool(msg.get("record_events")),
             raw=msg,
+            initial_state=self.decl.resolve_initial_state(msg.get("initial_state")),
         )
 
     def parse_triggers(self, t: Any) -> List[float]:

@@ -177,6 +177,31 @@ namespace Btqa.Game
         };
     }
 
+    /// <summary>
+    /// v1.4 run_episode.initial_state 로 받을 수 있는 판 시작 상태 1개. 이름 = Triggers.StateFeatures 중 하나 (0~1 비율).
+    /// 생략한 키 = Default (보통 1.0). initial_state 를 안 보낸 판은 1.3 과 같은 결과여야 한다.
+    /// </summary>
+    public sealed class InitialStateDecl
+    {
+        public string Name, Description;
+        public double Low, High, Default;
+
+        public InitialStateDecl(string name, double low = 0.0, double high = 1.0, double dflt = 1.0, string description = "")
+        {
+            Name = name; Low = low; High = high; Default = dflt; Description = description ?? "";
+        }
+
+        public bool Contains(double v) => v >= Low - 1e-9 && v <= High + 1e-9;
+
+        public JObject ToWire() => new JObject
+        {
+            ["name"] = Name,
+            ["range"] = new JArray(Low, High),
+            ["default"] = Default,
+            ["description"] = Description,
+        };
+    }
+
     public sealed class ScenarioDecl
     {
         public string Name, Description;
@@ -195,6 +220,8 @@ namespace Btqa.Game
         public readonly List<string> ResultFields = new List<string>();
         /// <summary>게임 고유 추가 필드 (학습 쪽은 모르는 필드를 무시).</summary>
         public JObject Extra;
+        /// <summary>v1.4: 받을 수 있는 판 시작 상태 (비어 있으면 initial_state 요청 거부).</summary>
+        public readonly List<InitialStateDecl> InitialState = new List<InitialStateDecl>();
 
         public ClassDecl Class(string name)
         {
@@ -218,6 +245,41 @@ namespace Btqa.Game
             if (!HasScenario("base")) outp.Add("scenario 'base' 필수");
             if (string.IsNullOrEmpty(Triggers.Type)) outp.Add("triggers.type 필요");
             if (Triggers.StateFeatures.Count == 0) outp.Add("triggers.state_features 비어 있음");
+            var seen = new HashSet<string>();
+            foreach (var s in InitialState)
+            {
+                if (!seen.Add(s.Name)) outp.Add("initial_state 이름 중복: " + s.Name);
+                if (!Triggers.StateFeatures.Contains(s.Name))
+                    outp.Add("initial_state." + s.Name + ": triggers.state_features 에 없는 이름 (같은 뜻의 0~1 비율이어야 함)");
+                if (!(0.0 <= s.Low && s.Low < s.High && s.High <= 1.0 && s.Low <= s.Default && s.Default <= s.High))
+                    outp.Add("initial_state." + s.Name + ": range 는 [0,1] 안, low < high, default 는 range 안");
+            }
+            return outp;
+        }
+
+        /// <summary>run_episode.initial_state 검증 → 선언 전체(default + 요청). 없거나 빈 객체면 null (= 1.3 과 같은 시작).</summary>
+        public Dictionary<string, double> ResolveInitialState(JToken t)
+        {
+            if (t == null || t.Type == JTokenType.Null) return null;
+            if (!(t is JObject o)) throw new ProtocolException(Wire.EBadRequest, "initial_state 는 객체여야 함");
+            if (!o.HasValues) return null;
+            var outp = new Dictionary<string, double>();
+            foreach (var s in InitialState) outp[s.Name] = s.Default;
+            foreach (var prop in o.Properties())
+            {
+                InitialStateDecl def = null;
+                foreach (var s in InitialState) if (s.Name == prop.Name) { def = s; break; }
+                if (def == null)
+                    throw new ProtocolException(Wire.EUnknownParam, "initial_state 에 '" + prop.Name + "' 없음");
+                var v = prop.Value;
+                if (v.Type != JTokenType.Float && v.Type != JTokenType.Integer)
+                    throw new ProtocolException(Wire.EBadRequest, "initial_state." + prop.Name + " 값이 숫자가 아님: " + v);
+                double x = v.Value<double>();
+                if (double.IsNaN(x) || double.IsInfinity(x) || !def.Contains(x))
+                    throw new ProtocolException(Wire.EParamOutOfRange, string.Format(CultureInfo.InvariantCulture,
+                        "initial_state.{0}={1:G6} 가 범위 [{2:G6}, {3:G6}] 밖", prop.Name, x, def.Low, def.High));
+                outp[prop.Name] = x;
+            }
             return outp;
         }
 
@@ -248,6 +310,12 @@ namespace Btqa.Game
                 ["triggers"] = Triggers.ToWire(),
             };
             if (ResultFields.Count > 0) d["result_fields"] = new JArray(ResultFields);
+            if (InitialState.Count > 0)
+            {
+                var init = new JArray();
+                foreach (var s in InitialState) init.Add(s.ToWire());
+                d["initial_state"] = init;
+            }
             if (Extra != null)
                 foreach (var prop in Extra.Properties())
                     if (d[prop.Name] == null) d[prop.Name] = prop.Value.DeepClone();

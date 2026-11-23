@@ -91,6 +91,37 @@ class ExampleGameTest(unittest.TestCase):
         finally:
             c.close()
 
+    def test_initial_state_v14(self):
+        c = ProbeClient(*self.server.address)
+        try:
+            d = c.request({"type": "describe"}, "description")
+            self.assertEqual([s["name"] for s in d["initial_state"]], ["hp_ratio", "potions_ratio"])
+            base, _ = c.run_episode("duelist", 4)
+            same, _ = c.run_episode("duelist", 4, initial_state={})          # 빈 객체 = 생략
+            self.assertEqual(base, same)
+            low, seen = c.run_episode("duelist", 4, initial_state={"hp_ratio": 0.3, "potions_ratio": 0.0},
+                                      triggers=("enemy_hp_below", [0.5]))
+            self.assertAlmostEqual(seen[0]["state"]["hp_ratio"], 0.3)
+            self.assertEqual(seen[0]["state"]["potions_ratio"], 0.0)
+            self.assertEqual(low["consumables_used"], 0)                     # 물약 0개로 시작
+            for bad, code in (({"mana": 0.5}, "unknown_param"), ({"hp_ratio": 0.01}, "param_out_of_range"),
+                              ({"hp_ratio": True}, "bad_request")):
+                with self.assertRaises(Exception) as ctx:
+                    c.run_episode("duelist", 1, initial_state=bad)
+                self.assertEqual(getattr(ctx.exception, "code", None), code, bad)
+        finally:
+            c.close()
+
+    def test_initial_state_declaration_rules(self):
+        from btqa_game import InitialStateDecl
+        decl = MinimalArena().declaration()
+        bad = GameDecl(**dict(decl.__dict__, initial_state=(InitialStateDecl("mana_ratio"),)))   # state_features 에 없음
+        with self.assertRaises(DeclarationError):
+            bad.validate()
+        bad = GameDecl(**dict(decl.__dict__, initial_state=(InitialStateDecl("hp_ratio", 0.5, 0.4),)))
+        with self.assertRaises(DeclarationError):
+            bad.validate()
+
 
 class StandaloneTest(unittest.TestCase):
     def test_python_sdk_uses_only_stdlib(self):

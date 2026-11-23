@@ -3,7 +3,7 @@ from setuptools import find_packages, setup
 
 setup(
     name="btqa-game",
-    version="0.1.0",
+    version="0.2.0",
     package_dir={"": "python"},
     packages=find_packages("python", include=["btqa_game*"]),
     python_requires=">=3.8",

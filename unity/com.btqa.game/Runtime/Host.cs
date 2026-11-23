@@ -22,6 +22,8 @@ namespace Btqa.Game
         public List<double> Thresholds;   // 요청 트리거 경계 (빈 목록 = 트리거 없음)
         public bool RecordEvents;
         public JObject Raw;               // 원본 메시지
+        /// <summary>v1.4 판 시작 상태: 선언 전체(default + 요청, 검증 완료). null = 요청 없음 (1.3 과 같은 시작).</summary>
+        public Dictionary<string, double> InitialState;
     }
 
     public interface IEpisodeHost

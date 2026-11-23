@@ -4,7 +4,7 @@
 
 | | |
 |---|---|
-| 계약 | [`docs/PROTOCOL.md`](docs/PROTOCOL.md) — TCP JSON Lines, 프로토콜 1.3 |
+| 계약 | [`docs/PROTOCOL.md`](docs/PROTOCOL.md) — TCP JSON Lines, 프로토콜 1.4 |
 | 가이드 | [`docs/SDK.md`](docs/SDK.md) — Unity·Python 게임에 붙이는 법 |
 | Unity | [`unity/com.btqa.game`](unity/com.btqa.game) — UPM 패키지 (`Btqa.Game`, Newtonsoft.Json 만) |
 | Python | [`python/btqa_game`](python/btqa_game) — 표준 라이브러리만, Python ≥ 3.8 |

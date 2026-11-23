@@ -8,7 +8,7 @@ namespace Btqa.Game
     public static class Wire
     {
         /// <summary>1.1 trigger.totals / 1.2 result.stalled / 1.3 classes[].blocks (학습 대상 = 블록 가중치)</summary>
-        public const string ProtocolVersion = "1.3";
+        public const string ProtocolVersion = "1.4";   // 1.4: run_episode.initial_state
 
         // 학습 → 게임
         public const string Hello = "hello";

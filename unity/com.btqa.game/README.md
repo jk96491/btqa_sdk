@@ -1,6 +1,6 @@
 # com.btqa.game — BT-QA Game SDK (Unity)
 
-BT 파라미터 밸런스 QA 학습 플랫폼(`balance_qa`)에 Unity 게임을 붙이는 패키지. 프로토콜 1.3 (`docs/PROTOCOL.md`).
+BT 파라미터 밸런스 QA 학습 플랫폼(`balance_qa`)에 Unity 게임을 붙이는 패키지. 프로토콜 1.4 (`docs/PROTOCOL.md`).
 
 - 네임스페이스 `Btqa.Game`, 어셈블리 `Btqa.Game` (UnityEngine 비의존, Newtonsoft.Json 만)
 - 게임이 구현할 것: `IEpisodeHost` (`Declare()` 정의서, `RunEpisode()` 판 1개)
