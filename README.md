@@ -4,19 +4,21 @@
 
 | | |
 |---|---|
-| 계약 | [`docs/PROTOCOL.md`](docs/PROTOCOL.md) — TCP JSON Lines, 프로토콜 1.4 |
-| 가이드 | [`docs/SDK.md`](docs/SDK.md) — Unity·Python 게임에 붙이는 법 |
+| 계약 | [`docs/PROTOCOL.md`](docs/PROTOCOL.md) — TCP JSON Lines, 밸런스 프로토콜 1.4 / [`docs/PLAY_PROTOCOL.md`](docs/PLAY_PROTOCOL.md) — 플레이 모드 0.3 |
+| 가이드 | [`docs/SDK.md`](docs/SDK.md) — Unity·Python 게임에 붙이는 법 / [`docs/PLAY_SDK.md`](docs/PLAY_SDK.md) — LLM 플레이어 클라이언트 |
 | Unity | [`unity/com.btqa.game`](unity/com.btqa.game) — UPM 패키지 (`Btqa.Game`, Newtonsoft.Json 만) |
-| Python | [`python/btqa_game`](python/btqa_game) — 표준 라이브러리만, Python ≥ 3.8 |
+| Python | [`python/btqa_game`](python/btqa_game) — 게임 쪽 (밸런스 서버), 표준 라이브러리만, Python ≥ 3.8 |
+| Python | [`python/btqa_play`](python/btqa_play) — 플레이 모드 클라이언트 (LLM 도구·tool use 루프·relay·LLM 백엔드), 표준 라이브러리만 |
 | 변경 이력 | [`CHANGELOG.md`](CHANGELOG.md) |
 
 ## 폴더
 
 ```
 btqa_sdk/
-├─ docs/            PROTOCOL.md (계약), SDK.md (가이드)
+├─ docs/            PROTOCOL.md·PLAY_PROTOCOL.md (계약), SDK.md·PLAY_SDK.md (가이드)
 ├─ unity/com.btqa.game/     Unity 패키지 (Runtime/: Wire, Declaration, Host, QaSession, QaServer)
 ├─ python/btqa_game/        Python 패키지 (+ conformance 적합성 검사, examples/minimal_arena 예제 게임)
+├─ python/btqa_play/        플레이 모드 클라이언트 (client·tools·prompt·pilot·relay·llm/)
 ├─ tests/           SDK 자체 테스트
 ├─ pyproject.toml, setup.py   pip 패키지 btqa-game
 └─ CHANGELOG.md
@@ -28,6 +30,7 @@ btqa_sdk/
 pip install -e .                                  # (setuptools < 64 이면 --no-build-isolation)
 python -m btqa_game example --port 7777           # 예제 게임 서버
 python -m btqa_game check --game 127.0.0.1:7777   # 적합성 검사 → 전 항목 PASS
+python -m btqa_play tools --game 127.0.0.1:7800 [--spec my_game.play.json]   # (플레이 모드 게임) LLM 도구·프롬프트 미리 보기 + 선언 검사
 python -m unittest discover -s tests -t .         # SDK 테스트
 ```
 

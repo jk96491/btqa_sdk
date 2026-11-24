@@ -1,5 +1,14 @@
 # 변경 이력
 
+## 0.3.0 — 2026-11-24
+
+**플레이 모드 클라이언트 `btqa_play` 추가** (밸런스 프로토콜 1.4 그대로, `btqa_game`·Unity 패키지 코드 변화 없음 — 버전만).
+
+- 계약 `docs/PLAY_PROTOCOL.md` 를 SDK 로 옮김 (원본). play v0.3 + **선택 필드** 4.2.1: `actions[].description`·`actions[].schema`(LLM 도구 설명·인자 JSON Schema), `pilot_guide{system_prompt, about, rules, default_goal}`, `progress_keys`. hello 버전 그대로 (보내지 않는 게임·읽지 않는 클라이언트 모두 그대로 동작)
+- `btqa_play`: `PlayClient`(전투 메시지 수집·trigger 즉답·pilot_note), **SDK 에 게임 내용 없음**: `PlaySpec`(외부 플레이 스펙 `btqa-play-spec/1`), `build_tools`(게임 선언 → 외부 스펙 → 일반형)·`GameTools`·`validate_description`·`tool_sources`, `build_system_prompt`(SDK 공통 규칙 = 도구 사용 방식만 + `pilot_guide`), 진척 = `progress_keys` (없으면 관찰 전체 − 매번 바뀌는 필드), `LlmBackend`(`AnthropicBackend`·`OpenAICompatBackend`, `llm.json`), `LlmPilot`, `PilotRelay`(확장 지점 `prepare`·`run_meta`), `python -m btqa_play tools|spec|play|relay|step` (`--spec`)
+- 출처: AI_QA `play_agent` (2026-11-23) 의 클라이언트·도구·루프·백엔드를 게임 독립으로 옮김. 전투 로드아웃·응답기(학습 결과 형식)는 SDK 밖
+- 가이드 `docs/PLAY_SDK.md`, 테스트 `tests/test_play.py` (가짜 플레이 게임·가짜 LLM)
+
 ## 0.2.0 — 2026-11-23
 
 프로토콜 1.4 (부 버전, 1.3 과 호환).

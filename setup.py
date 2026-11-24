@@ -3,9 +3,10 @@ from setuptools import find_packages, setup
 
 setup(
     name="btqa-game",
-    version="0.2.0",
+    version="0.3.0",
     package_dir={"": "python"},
-    packages=find_packages("python", include=["btqa_game*"]),
+    packages=find_packages("python", include=["btqa_game*", "btqa_play*"]),
+    package_data={"btqa_play": ["*.json"]},
     python_requires=">=3.8",
-    entry_points={"console_scripts": ["btqa-game = btqa_game.__main__:main"]},
+    entry_points={"console_scripts": ["btqa-game = btqa_game.__main__:main", "btqa-play = btqa_play.__main__:main"]},
 )

@@ -1,7 +1,7 @@
 # BT-QA Game SDK 가이드
 
 > 한 줄: **게임은 BT 를 설계하고 블록 가중치를 선언한다. 학습 플랫폼은 그 가중치만 학습해 돌려준다.**
-> 계약 [`PROTOCOL.md`](PROTOCOL.md) v1.4. SDK 0.2.0.
+> 계약 [`PROTOCOL.md`](PROTOCOL.md) v1.4. SDK 0.3.0. 플레이 모드 클라이언트는 [`PLAY_SDK.md`](PLAY_SDK.md).
 
 ## 1. 구성
 
@@ -127,7 +127,7 @@ Unity: `decl.InitialState.Add(new InitialStateDecl("hp_ratio", 0.05, 1.0, 1.0, "
 | 구성 | 버전 |
 |---|---|
 | 프로토콜 | 1.4 (같은 주 버전 1.x 끼리 호환) |
-| `com.btqa.game` / `btqa_game` | 0.2.0 (둘은 항상 같은 버전으로 올린다 — `tests/test_sdk.py` 가 검사) |
+| `com.btqa.game` / `btqa_game` / `btqa_play` | 0.3.0 (셋은 항상 같은 버전으로 올린다 — `tests/test_sdk.py`·`tests/test_play.py` 가 검사) |
 
 프로토콜을 바꾸면 `docs/PROTOCOL.md` → `python/btqa_game` → `unity/com.btqa.game/Runtime` → `btqa_game.conformance` 를 같이 맞추고 `CHANGELOG.md` 에 적는다.
 

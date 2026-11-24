@@ -1,0 +1,9 @@
+{
+  "_comment": "복사해서 작업 폴더에 llm.json 으로 저장 (llm.json 은 git 에 안 올라감). 키는 쓰지 않는다 — api_key_env 에 환경변수 이름만. 안내 docs/PLAY_SDK.md 4장",
+  "llm": "openai",
+  "model": "qwen2.5:14b",
+  "base_url": "http://localhost:11434/v1",
+  "api_key_env": null,
+  "max_tokens": 4000,
+  "temperature": 0.2
+}
