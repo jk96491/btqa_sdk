@@ -1,5 +1,23 @@
 # 변경 이력
 
+## 0.4.0 — 2026-11-24
+
+**작은 로컬 LLM(CPU 추론)·증류용 단계 형식** (`btqa_play`). 밸런스 프로토콜 1.4·플레이 0.3 그대로, `btqa_game`·Unity 패키지 코드 변화 없음 (버전만).
+
+- `actions.py` 단계 형식: 한 단계 = [고정 system(규칙+목표+도구+출력 형식), 지금 관찰 + 직전 행동 결과] → JSON 행동 1개 `{"thought","tool","input"}`. 대화 기록 없음. `action_schema` = 출력 JSON Schema (도구별 anyOf)
+- `LlmPilot(config=PilotConfig(stateless=True))`: 단계마다 새 대화, `PilotRun.invalid_outputs`·`latency_s`
+- `llm/json_action.py: JsonActionBackend` (`tool_mode: "json"`): 서버 function calling 대신 `response_format: json_schema` 로 출력 강제 (Ollama·llama.cpp), OpenAI 호환·표준 라이브러리
+- `record.py: StepRecorder` 단계 기록 JSONL (`btqa-play-step/1`: 학생 입력 그대로, 목표, 결과, 토큰, 지연) + `grounding_issues` (입력에 없는 id·근거 없는 좌표 표시 — 교사가 학생이 못 보는 정보로 판단한 샘플 거르기)
+- `PilotRelay(record=...)`: 교사 기록 모드 — 응답 = 학생과 같은 다음 단계 입력만, `step view`
+- `observation_drop` (스펙·게임 선언 4.2.1): LLM 에게 보이기 전에 뺄 관찰 경로 (`a.b`, 목록 원소마다, `name[k=v]` 필터) — 입력 길이
+- CLI: `play --tool-mode json --stateless --record F`, `relay --record F`
+- `evaluate.py: run_batch` 여러 seed 평가 → summary.json (완료율·형식 오류율·호출당 시간·판별 토큰), `python -m btqa_play batch`
+- `dataset.py: build_dataset` 단계 기록 → 학습 train/val (`btqa-play-sft/1`): source·형식 오류·grounding·중복 거르기, 판 단위 분할, `python -m btqa_play dataset`
+- **선택 패키지 `btqa_distill`** (SDK 에서 유일하게 외부 의존성: torch·transformers·peft, extra `distill`): `TrainConfig`, `train_lora`(assistant 에만 loss, bf16 + LoRA fp32), `export`(merge → llama.cpp GGUF → 양자화 → Ollama, 기본 CPU 전용 `num_gpu 0`), `python -m btqa_distill check|train|merge|gguf|ollama|cpu-variant`. 가이드 `docs/DISTILL_SDK.md`
+- 모델 파일 커밋 금지: `.gitignore` 모델 규칙 + `tests/test_no_model_files.py`
+- `LlmPilot(on_step=...)`: 단계마다 콜백 (화면·콘솔 표시용)
+- 수정: 판마다 토큰 사용량을 따로 (백엔드를 여러 판에 쓰면 누적되던 문제)
+
 ## 0.3.0 — 2026-11-24
 
 **플레이 모드 클라이언트 `btqa_play` 추가** (밸런스 프로토콜 1.4 그대로, `btqa_game`·Unity 패키지 코드 변화 없음 — 버전만).

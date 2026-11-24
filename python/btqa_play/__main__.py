@@ -3,8 +3,12 @@
     tools  --game HOST:PORT [--spec F]      게임 선언(+외부 스펙)으로 만든 LLM 도구·출처·시스템 프롬프트·선언 검사
     spec   F                                외부 플레이 스펙 파일 형식 검사 (게임 없이)
     play   --game HOST:PORT --llm openai --model qwen2.5:14b   각자 고른 LLM 이 플레이 (로드아웃 없음 = 게임 default BT)
+           작은 로컬 모델 (CPU): --tool-mode json --stateless [--record steps.jsonl]
     relay  --game HOST:PORT [--port 7899]   대화형 에이전트가 플레이어 (API 없음). 이후 step 으로 한 행동씩
+           증류 교사 데이터: --record teacher.jsonl (학생과 같은 단계 입력만 보고 판단)
     step   <tool> ['<json>'] [--think "..."] [--kind plan]   relay 에 도구 호출 1개
+    batch  --game HOST:PORT --seeds 1-5 --llm openai --model M --tool-mode json --stateless [--record]   여러 seed 평가 → summary.json
+    dataset <기록.jsonl ...> --out <폴더>      단계 기록 → 학습용 train/val (증류, 학습은 python -m btqa_distill)
 
 tools·play·relay 의 --spec F: 게임이 아직 선언하지 않은 행동 설명·스키마·안내를 외부 스펙 파일(btqa-play-spec/1)로 채운다.
 전투 로드아웃·학습된 응답기가 필요하면 이 SDK 위에 쓰는 쪽 클라이언트를 만든다 (예: AI_QA 의 play_agent).
@@ -20,6 +24,7 @@ from typing import List, Optional
 
 from btqa_play.client import PlayClient
 from btqa_play.prompt import build_system_prompt, default_goal
+from btqa_play.record import StepRecorder
 from btqa_play.spec import PlaySpec, SpecError, as_spec, validate_spec
 from btqa_play.relay import DEFAULT_RELAY_PORT, PilotRelay, relay_step
 from btqa_play.tools import build_tools, tool_sources, validate_description
@@ -74,7 +79,8 @@ def cmd_play(a: argparse.Namespace) -> int:
 
     try:
         backend = make_backend(load_config(a.llm_config, {"llm": a.llm, "model": a.model, "base_url": a.base_url,
-                                                          "api_key_env": a.api_key_env, "effort": a.effort}))
+                                                          "api_key_env": a.api_key_env, "effort": a.effort,
+                                                          "tool_mode": a.tool_mode}))
     except (ValueError, FileNotFoundError) as e:
         print("LLM 설정:", e, file=sys.stderr)
         return 2
@@ -82,8 +88,11 @@ def cmd_play(a: argparse.Namespace) -> int:
         c.hello()
         c.describe()
         obs = c.reset(seed=a.seed, cls=a.cls)
-        run = LlmPilot(c, config=PilotConfig(max_actions=a.max_actions, max_calls=a.max_calls, goal=a.goal),
-                       backend=backend, spec=_spec(a)).run(obs)
+        rec = StepRecorder(a.record, run="play-%s-s%s" % (time.strftime("%Y%m%d-%H%M%S"), a.seed), source="model",
+                           model=backend.label) if a.record else None
+        run = LlmPilot(c, config=PilotConfig(max_actions=a.max_actions, max_calls=a.max_calls, goal=a.goal,
+                                             stateless=a.stateless or a.record is not None),
+                       backend=backend, spec=_spec(a), recorder=rec).run(obs)
         log = c.get_log()
         notes, pilot_notes = list(c.notes), list(c.pilot_notes)
     out = Path(a.out) / ("play-" + time.strftime("%Y%m%d-%H%M%S"))
@@ -96,7 +105,43 @@ def cmd_play(a: argparse.Namespace) -> int:
 
 
 def cmd_relay(a: argparse.Namespace) -> int:
-    PilotRelay(a.game, seed=a.seed, cls=a.cls, port=a.port, out=a.out, spec=_spec(a)).serve()
+    PilotRelay(a.game, seed=a.seed, cls=a.cls, port=a.port, out=a.out, spec=_spec(a),
+               stateless=a.stateless, record=a.record).serve()
+    return 0
+
+
+def cmd_batch(a: argparse.Namespace) -> int:
+    from btqa_play.evaluate import parse_seeds, run_batch
+    from btqa_play.llm import load_config, make_backend
+    from btqa_play.pilot import PilotConfig
+    try:
+        cfg = load_config(a.llm_config, {"llm": a.llm, "model": a.model, "base_url": a.base_url, "api_key_env": a.api_key_env,
+                                         "effort": a.effort, "tool_mode": a.tool_mode})
+        backend = make_backend(cfg)
+    except (ValueError, FileNotFoundError) as e:
+        print("LLM 설정:", e, file=sys.stderr)
+        return 2
+    out = Path(a.out) / ("batch-" + time.strftime("%Y%m%d-%H%M%S"))
+    with PlayClient.connect(a.game) as c:
+        c.hello()
+        c.describe()
+        s = run_batch(c, backend, parse_seeds(a.seeds), PilotConfig(max_actions=a.max_actions, max_calls=a.max_calls,
+                                                                    goal=a.goal, stateless=a.stateless),
+                      spec=_spec(a), cls=a.cls, out_dir=out, record=a.record,
+                      on_run=lambda r: print("seed %(seed)d: %(end_reason)s | 퀘스트 %(quests_done)d/%(quests_total)d | "
+                                             "행동 %(actions)d, 형식 오류 %(invalid_outputs)d | 호출당 %(latency_mean_s).1fs" % r, flush=True))
+    print("요약: 전부 완료 %.0f%% | 퀘스트 평균 %.1f/%d | 형식 오류율 %.1f%% | %s" % (
+        100 * s["full_clear_rate"], s["quests_done_mean"], s["quests_total"], 100 * s["invalid_rate"], out))
+    return 0
+
+
+def cmd_dataset(a: argparse.Namespace) -> int:
+    from btqa_play.dataset import build_dataset
+    st = build_dataset(a.inputs, a.out, val_ratio=a.val_ratio, seed=a.seed, sources=tuple(a.sources),
+                       keep_ungrounded=a.keep_ungrounded)
+    print(json.dumps({k: st[k] for k in ("read", "kept", "dropped", "conflicting_inputs", "runs", "train", "val", "tools")},
+                     ensure_ascii=False))
+    print("→", a.out, "(train.jsonl / val.jsonl / stats.json) — git 제외 경로에 둘 것")
     return 0
 
 
@@ -135,6 +180,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--max-calls", type=int, default=250)
     p.add_argument("--out", default="reports")
     p.add_argument("--spec", help="외부 플레이 스펙 파일")
+    p.add_argument("--tool-mode", choices=["native", "json"], help="openai: json = 출력 JSON 을 스키마로 강제 (작은 로컬 모델)")
+    p.add_argument("--stateless", action="store_true", help="단계마다 새 대화 (지금 관찰 + 직전 행동 결과만)")
+    p.add_argument("--record", help="단계 기록 JSONL (stateless 를 켠다)")
     p.set_defaults(fn=cmd_play)
 
     p = sub.add_parser("relay", help="대화형 에이전트가 플레이어가 되는 중계기 (API 호출 없음)")
@@ -144,9 +192,40 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--port", type=int, default=DEFAULT_RELAY_PORT)
     p.add_argument("--out", default="reports")
     p.add_argument("--spec", help="외부 플레이 스펙 파일")
+    p.add_argument("--stateless", action="store_true", help="단계 형식: 응답에 학생과 같은 다음 단계 입력만")
+    p.add_argument("--record", help="교사 데이터 JSONL (stateless 를 켠다)")
     p.set_defaults(fn=cmd_relay)
 
-    p = sub.add_parser("step", help="relay 에 도구 호출 1개 (tool=intro 처음 관찰·도구·규칙, note 메모만)")
+    p = sub.add_parser("batch", help="같은 LLM 으로 여러 seed 평가 → summary.json")
+    p.add_argument("--game", required=True)
+    p.add_argument("--seeds", default="1-5")
+    p.add_argument("--cls")
+    p.add_argument("--goal")
+    p.add_argument("--llm", choices=["anthropic", "openai"])
+    p.add_argument("--llm-config")
+    p.add_argument("--model")
+    p.add_argument("--base-url")
+    p.add_argument("--api-key-env")
+    p.add_argument("--effort", choices=["low", "medium", "high", "xhigh", "max"])
+    p.add_argument("--tool-mode", choices=["native", "json"])
+    p.add_argument("--stateless", action="store_true")
+    p.add_argument("--record", action="store_true", help="판별 단계 기록 steps.jsonl (stateless 를 켠다)")
+    p.add_argument("--max-actions", type=int, default=150)
+    p.add_argument("--max-calls", type=int, default=250)
+    p.add_argument("--out", default="reports")
+    p.add_argument("--spec")
+    p.set_defaults(fn=cmd_batch)
+
+    p = sub.add_parser("dataset", help="단계 기록 JSONL → 학습용 train/val (증류)")
+    p.add_argument("inputs", nargs="+")
+    p.add_argument("--out", required=True)
+    p.add_argument("--val-ratio", type=float, default=0.1)
+    p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--sources", nargs="+", default=["teacher"], help="쓸 기록 source (기본 teacher)")
+    p.add_argument("--keep-ungrounded", action="store_true", help="입력에 근거 없는 샘플도 남긴다 (기본: 뺀다)")
+    p.set_defaults(fn=cmd_dataset)
+
+    p = sub.add_parser("step", help="relay 에 도구 호출 1개 (tool=intro 처음 관찰·도구·규칙, note 메모만, view 지금 단계 입력)")
     p.add_argument("tool")
     p.add_argument("input", nargs="?")
     p.add_argument("--think")

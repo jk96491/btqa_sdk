@@ -10,19 +10,26 @@
     LlmPilot        LLM tool use 루프 (LlmBackend: anthropic / openai 호환)
     PilotRelay      대화형 에이전트(Claude Code 등)가 직접 플레이어 — API 없음
     build_system_prompt  SDK 공통 규칙(도구 사용 방식만) + pilot_guide (게임 → 스펙)
+    actions / StepRecorder  단계 형식 (지금 관찰 + 직전 결과 → JSON 행동 1개) · 단계 기록 (작은 로컬 모델·증류)
+    evaluate.run_batch      여러 seed 평가 → summary (기준선·증류 비교)
+    dataset.build_dataset   단계 기록 → 학습용 train/val (학습 자체는 선택 패키지 btqa_distill)
 
 전투 응답기(trigger → params)는 SDK 밖이다: 학습 결과 형식에 묶이므로 쓰는 쪽이 callable 로 넘긴다.
 """
+from btqa_play.actions import action_schema, action_system_prompt, action_text, parse_action, step_input, with_goal
 from btqa_play.client import (BOSS_MISMATCH_CODES, NOTE_KINDS, PROTOCOL, PROTOCOL_VERSION, ActResult, Combat, PlayClient,
                               PlayError, TriggerResponder, parse_endpoint)
 from btqa_play.pilot import LlmPilot, PilotConfig, PilotRun, progress_signature
 from btqa_play.prompt import CORE_PROMPT, DEFAULT_GOAL, build_system_prompt, default_goal
+from btqa_play.dataset import DATASET_FORMAT, build_dataset
+from btqa_play.evaluate import parse_seeds, run_batch
+from btqa_play.record import STEP_FORMAT, StepRecorder, grounding_issues, read_steps
 from btqa_play.relay import DEFAULT_RELAY_PORT, PilotRelay, relay_step
 from btqa_play.spec import SPEC_FORMAT, PlaySpec, SpecError, as_spec, validate_spec
 from btqa_play.tools import (META_TOOLS, GameTools, build_tools, compact_observation, to_text, tool_sources,
                              validate_description)
 
-__version__ = "0.3.0"   # SDK 레포 버전 (btqa_game 과 같이 올린다)
+__version__ = "0.4.0"   # SDK 레포 버전 (btqa_game 과 같이 올린다)
 
 __all__ = [
     "PROTOCOL", "PROTOCOL_VERSION", "NOTE_KINDS", "BOSS_MISMATCH_CODES",
@@ -32,5 +39,8 @@ __all__ = [
     "CORE_PROMPT", "DEFAULT_GOAL", "build_system_prompt", "default_goal",
     "LlmPilot", "PilotConfig", "PilotRun", "progress_signature",
     "PilotRelay", "relay_step", "DEFAULT_RELAY_PORT",
+    "action_schema", "action_system_prompt", "action_text", "parse_action", "step_input", "with_goal",
+    "STEP_FORMAT", "StepRecorder", "grounding_issues", "read_steps",
+    "DATASET_FORMAT", "build_dataset", "run_batch", "parse_seeds",
     "__version__",
 ]

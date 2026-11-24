@@ -16,7 +16,10 @@ from typing import Any, Dict, Mapping, Optional
 from btqa_play.llm.base import LlmBackend, ToolCall, ToolResult, Turn
 
 BACKENDS = ("anthropic", "openai")
-CONFIG_KEYS = ("llm", "model", "base_url", "api_key_env", "effort", "max_tokens", "temperature", "timeout", "extra_body")
+CONFIG_KEYS = ("llm", "model", "base_url", "api_key_env", "effort", "max_tokens", "temperature", "timeout", "extra_body",
+               "tool_mode", "json_schema")
+#: openai 백엔드의 도구 방식: native = 서버 function calling, json = JSON 한 개를 스키마로 강제 (작은 로컬 모델)
+TOOL_MODES = ("native", "json")
 DEFAULT_CONFIG_FILE = "llm.json"
 
 
@@ -48,10 +51,19 @@ def make_backend(cfg: Mapping[str, Any]) -> LlmBackend:
         return AnthropicBackend(model=cfg.get("model") or DEFAULT_MODEL, effort=cfg.get("effort") or "low",
                                 max_tokens=int(cfg.get("max_tokens") or 8000), api_key_env=cfg.get("api_key_env"))
     from btqa_play.llm.openai_compat import DEFAULT_BASE_URL, OpenAICompatBackend
+    mode = cfg.get("tool_mode") or "native"
+    if mode not in TOOL_MODES:
+        raise ValueError("tool_mode 는 %s 중 하나 (받은 값 %r)" % ("|".join(TOOL_MODES), mode))
+    if mode == "json":   # 작은 로컬 모델: 출력 JSON 을 스키마로 강제 (llm/json_action.py)
+        from btqa_play.llm.json_action import JsonActionBackend
+        return JsonActionBackend(model=cfg.get("model") or "", base_url=cfg.get("base_url") or DEFAULT_BASE_URL,
+                                 api_key_env=cfg.get("api_key_env"), max_tokens=int(cfg.get("max_tokens") or 400),
+                                 temperature=cfg.get("temperature", 0.0), timeout=float(cfg.get("timeout") or 600.0),
+                                 extra_body=cfg.get("extra_body"), schema=bool(cfg.get("json_schema", True)))
     return OpenAICompatBackend(model=cfg.get("model") or "", base_url=cfg.get("base_url") or DEFAULT_BASE_URL,
                                api_key_env=cfg.get("api_key_env"), max_tokens=int(cfg.get("max_tokens") or 4000),
                                temperature=cfg.get("temperature"), timeout=float(cfg.get("timeout") or 600.0),
                                extra_body=cfg.get("extra_body"))
 
 
-__all__ = ["LlmBackend", "ToolCall", "ToolResult", "Turn", "BACKENDS", "load_config", "make_backend"]
+__all__ = ["LlmBackend", "ToolCall", "ToolResult", "Turn", "BACKENDS", "TOOL_MODES", "load_config", "make_backend"]

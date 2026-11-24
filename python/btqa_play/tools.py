@@ -18,10 +18,11 @@ SDK 는 행동의 **내용**(설명 문장·인자 의미)을 들고 있지 않�
 from __future__ import annotations
 
 import json
-from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
+from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from btqa_play.client import ActResult, Combat, PlayClient, PlayError
-from btqa_play.spec import (META_TOOL_NAMES, PlaySpec, check_guide, check_progress_keys, check_schema)
+from btqa_play.spec import (META_TOOL_NAMES, PlaySpec, check_guide, check_observation_drop, check_progress_keys,
+                            check_schema)
 
 NULLABLE_STR = {"anyOf": [{"type": "string"}, {"type": "null"}]}
 
@@ -163,6 +164,8 @@ def validate_description(description: Mapping[str, Any], spec: Optional[PlaySpec
         out += check_guide("pilot_guide", description["pilot_guide"])
     if "progress_keys" in description:
         out += check_progress_keys("progress_keys", description["progress_keys"])
+    if "observation_drop" in description:
+        out += check_observation_drop("observation_drop", description["observation_drop"])
     return out
 
 
@@ -176,9 +179,45 @@ def _round(x: Any) -> Any:
     return x
 
 
-def compact_observation(obs: Mapping[str, Any]) -> Dict[str, Any]:
+def _match(item: Any, flt: Optional[Tuple[str, str]]) -> bool:
+    return flt is None or (isinstance(item, Mapping) and str(item.get(flt[0])) == flt[1])
+
+
+def _drop_path(node: Any, parts: List[str]) -> Any:
+    """parts 경로를 node 에서 뺀 사본. 목록은 원소마다, 마지막 조각 name[k=v] 는 k==v 인 원소만 뺀다."""
+    if isinstance(node, list):
+        return [_drop_path(x, parts) for x in node]
+    if not isinstance(node, dict) or not parts:
+        return node
+    head, flt = parts[0], None
+    if head.endswith("]") and "[" in head:
+        head, cond = head[:-1].split("[", 1)
+        k, _, v = cond.partition("=")
+        flt = (k, v)
+    out = dict(node)
+    if head not in out:
+        return out
+    if len(parts) == 1:
+        if flt is None:
+            out.pop(head)
+        elif isinstance(out[head], list):
+            out[head] = [x for x in out[head] if not _match(x, flt)]
+        return out
+    out[head] = _drop_path(out[head], parts[1:])
+    return out
+
+
+def drop_paths(obs: Mapping[str, Any], paths: Sequence[str]) -> Dict[str, Any]:
+    o: Any = dict(obs)
+    for p in paths:
+        o = _drop_path(o, p.split("."))
+    return o
+
+
+def compact_observation(obs: Mapping[str, Any], drop: Sequence[str] = ()) -> Dict[str, Any]:
+    """LLM 에게 보일 관찰: type·seq 제거, drop 경로(observation_drop) 제거, 숫자 반올림."""
     o = {k: v for k, v in obs.items() if k not in ("type", "seq")}
-    return _round(o)
+    return _round(drop_paths(o, drop) if drop else o)
 
 
 class GameTools:
@@ -223,4 +262,4 @@ def to_text(result: Mapping[str, Any]) -> str:
 
 
 __all__ = ["META_TOOLS", "build_tools", "tool_sources", "validate_description",
-           "GameTools", "compact_observation", "to_text", "PlayError"]
+           "GameTools", "compact_observation", "drop_paths", "to_text", "PlayError"]

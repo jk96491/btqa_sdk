@@ -7,3 +7,23 @@ dist/
 venv/
 .idea/
 .vscode/
+
+# ---- 모델 가중치·어댑터·증류 산출물: 원본이든 증류든 절대 커밋하지 않는다 (사용자 결정 2026-11-24) ----
+*.gguf
+*.safetensors
+*.bin
+*.pt
+*.pth
+*.ckpt
+*.onnx
+*.ggml
+*.lora
+adapter_model.*
+adapter_config.json
+distill/out/
+distill/models/
+distill/data/
+distill_out/
+models/
+checkpoint-*/
+venv_distill/

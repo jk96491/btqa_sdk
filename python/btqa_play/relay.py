@@ -10,6 +10,11 @@ LlmPilot 은 LLM API 를 스스로 부르는 루프다. 이 중계기는 반대�
 도구 = LlmPilot 과 같은 GameTools (전투는 학습된 BT·응답기가 끝낸다). finish 를 받으면 host 가
 <out>/relay-<시각>/run.json·play_log.json 을 남기고 종료한다. 중계 메시지는 게임 프로토콜과 별개 (JSON Lines).
 
+단계 형식 기록 (stateless=True, record=<jsonl>) — 증류용 교사 데이터:
+    교사(대화형 에이전트)는 **학생과 같은 입력만** 보고 판단한다. intro·view·매 행동의 응답에 다음 단계 입력
+    (actions.step_input = 지금 관찰 + 직전 행동 결과) 이 실리고, 교사는 그것만 읽고 다음 행동을 정한다.
+    thought(--think) 가 학습 목표의 thought 가 된다. 행동마다 StepRecorder 로 JSONL 한 줄.
+
 확장 지점 (하위 클래스):
     prepare(client, desc) -> responder   로드아웃(set_loadout)·전투 응답기 준비. 기본 = 없음 (게임 default BT)
     run_meta() -> dict                   run.json 에 덧붙일 정보 (로드아웃 출처 등)
@@ -22,9 +27,11 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Union
 
+from btqa_play.actions import action_system_prompt, last_action_record, step_input, with_goal
 from btqa_play.client import PlayClient, TriggerResponder
 from btqa_play.prompt import build_system_prompt, default_goal
-from btqa_play.spec import PlaySpec, as_spec
+from btqa_play.record import StepRecorder
+from btqa_play.spec import PlaySpec, as_spec, effective_observation_drop
 from btqa_play.tools import GameTools, build_tools, compact_observation, to_text, tool_sources
 
 DEFAULT_RELAY_PORT = 7899
@@ -33,9 +40,17 @@ DEFAULT_RELAY_PORT = 7899
 class PilotRelay:
     def __init__(self, game: str, seed: int = 1, cls: Optional[str] = None, port: int = DEFAULT_RELAY_PORT,
                  out: str = "reports", pilot: str = "claude-code",
-                 spec: Union[None, PlaySpec, Mapping[str, Any], str] = None) -> None:
+                 spec: Union[None, PlaySpec, Mapping[str, Any], str] = None,
+                 stateless: bool = False, record: Optional[Union[str, Path]] = None) -> None:
         self.game, self.seed, self.cls, self.port, self.out, self.pilot = game, seed, cls, port, Path(out), pilot
         self.spec = as_spec(spec)   # 외부 플레이 스펙 (게임이 선언하지 않은 설명·스키마·안내)
+        self.stateless = stateless or record is not None
+        self.record_path = Path(record) if record else None
+        self.recorder: Optional[StepRecorder] = None
+        self._system = ""            # 단계 형식 system (학생이 받는 글자)
+        self._drop: List[str] = []
+        self._last: Optional[Dict[str, Any]] = None
+        self._obs: Dict[str, Any] = {}
         self.transcript: List[Dict[str, Any]] = []
         self.client: Any = None
 
@@ -51,8 +66,15 @@ class PilotRelay:
         return []
 
     # ---------------------------------------------------------------- 실행
+    def _view(self) -> Dict[str, Any]:
+        """단계 형식: 지금 단계 입력 (학생이 받는 user 메시지 그대로)."""
+        return {"step_input": step_input(compact_observation(self._obs, self._drop), self._last)}
+
     def intro(self, desc: Mapping[str, Any], first: Mapping[str, Any]) -> Dict[str, Any]:
         """대화형 에이전트가 처음 읽을 것 = LlmPilot 이 LLM 에게 주는 것과 같은 정보."""
+        if self.stateless:
+            return dict(self._view(), system=self._system, tool_sources=tool_sources(desc, self.spec),
+                        record=str(self.record_path) if self.record_path else None)
         return {"game": "%s %s" % (desc.get("game"), desc.get("game_version")),
                 "goal": default_goal(desc, self.spec),
                 "system_prompt": build_system_prompt(desc, self.spec),   # LlmPilot 의 LLM 이 받는 규칙 그대로
@@ -70,6 +92,14 @@ class PilotRelay:
             responder = self.prepare(c, desc)
             first = c.reset(seed=self.seed, cls=self.cls)
             tools = GameTools(c, responder)
+            if self.stateless:
+                tl = build_tools(desc, self.spec)
+                self._system = action_system_prompt(with_goal(build_system_prompt(desc, self.spec), default_goal(desc, self.spec)), tl)
+                self._drop = effective_observation_drop(desc, self.spec)
+                self._obs = dict(first)
+                if self.record_path:
+                    self.recorder = StepRecorder(self.record_path, run="relay-%s-s%s" % (time.strftime("%Y%m%d-%H%M%S"), self.seed),
+                                                 source="teacher", model=self.pilot)
             intro = self.intro(desc, first)
             self.client = c
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as srv:
@@ -90,7 +120,9 @@ class PilotRelay:
     def _handle(self, tools: GameTools, req: Mapping[str, Any], intro: Mapping[str, Any]) -> Dict[str, Any]:
         name, inp = req.get("tool"), dict(req.get("input") or {})
         if name == "intro":   # 처음 관찰·도구 목록 다시 보기 (행동 아님)
-            return dict(intro)
+            return dict(intro, **self._view()) if self.stateless else dict(intro)
+        if name == "view" and self.stateless:   # 지금 단계 입력 다시 보기
+            return self._view()
         thought, kind = req.get("thought"), str(req.get("kind") or "thought")
         shown = None
         if thought:
@@ -106,13 +138,32 @@ class PilotRelay:
         self.transcript.append({"tool": name, "input": inp, "thought": thought, "kind": kind if thought else None, "shown": shown,
                                 "status": out.get("status"), "reason": out.get("reason"),
                                 "error": out.get("error"), "combats": out.get("combats")})
-        return out
+        if not self.stateless:
+            return out
+        # 교사가 이 행동을 정할 때 본 입력 (아직 갱신 전 상태) → 기록 → 상태 갱신 → 다음 단계 입력을 돌려준다
+        user_before = self._view()["step_input"]
+        view_before = compact_observation(self._obs, self._drop)
+        self._last = last_action_record(str(name), inp, out)
+        grounding: List[str] = []
+        if self.recorder is not None:
+            grounding = self.recorder.write(self._system, user_before, view_before, str(thought or ""), str(name), inp,
+                                            self._last)["grounding"]
+        if tools.last_observation:
+            self._obs = dict(tools.last_observation)
+        res: Dict[str, Any] = {"result": self._last, **self._view()}
+        if grounding:
+            res["grounding"] = grounding   # 이 행동은 입력에 근거가 없다 (학습 데이터에서 검토)
+        return res
 
     def _save(self, desc: Mapping[str, Any], tools: GameTools, log: Mapping[str, Any], notes: List[str], seconds: float) -> Path:
         out = self.out / ("relay-" + time.strftime("%Y%m%d-%H%M%S"))
         out.mkdir(parents=True, exist_ok=True)
         run = {"game": "%s %s" % (desc.get("game"), desc.get("game_version")), "seed": self.seed, "class": self.cls,
                "pilot": self.pilot, "notes": notes, "spec": self.spec.source or None,
+               "mode": "stateless" if self.stateless else "conversation",
+               "record": str(self.record_path) if self.record_path else None,
+               "record_steps": self.recorder.step if self.recorder else 0,
+               "record_flagged": self.recorder.flagged if self.recorder else 0,
                "end_reason": "finish", "finish": tools.finished, "actions": tools.actions,
                "combats": [x.summary() for x in tools.combats], "seconds": seconds,
                "last_observation": tools.last_observation, "transcript": self.transcript,

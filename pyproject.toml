@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "btqa-game"
-version = "0.3.0"
+version = "0.4.0"
 description = "BT-QA Game SDK: 게임을 BT 밸런스 QA 학습 플랫폼에 붙이는 키트 (밸런스 프로토콜 1.4 게임 서버 + 플레이 모드 0.3 LLM 클라이언트, 학습 대상 = 블록 가중치뿐)"
 readme = "README.md"
 requires-python = ">=3.8"
@@ -15,13 +15,19 @@ keywords = ["qa", "game-balance", "behavior-tree", "reinforcement-learning"]
 [project.scripts]
 btqa-game = "btqa_game.__main__:main"
 btqa-play = "btqa_play.__main__:main"
+btqa-distill = "btqa_distill.__main__:main"
+
+[project.optional-dependencies]
+# 증류 학습(선택): 별도 venv, Python >= 3.10, torch 는 CUDA 판을 먼저 (python/btqa_distill/requirements.txt)
+distill = ["torch>=2.1", "transformers>=4.44", "peft>=0.12", "safetensors"]
 
 [tool.setuptools]
 package-dir = { "" = "python" }
 
 [tool.setuptools.packages.find]
 where = ["python"]
-include = ["btqa_game*", "btqa_play*"]
+include = ["btqa_game*", "btqa_play*", "btqa_distill*"]
 
 [tool.setuptools.package-data]
 btqa_play = ["*.json"]
+btqa_distill = ["*.txt"]

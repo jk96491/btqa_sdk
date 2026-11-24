@@ -8,7 +8,8 @@
 | 가이드 | [`docs/SDK.md`](docs/SDK.md) — Unity·Python 게임에 붙이는 법 / [`docs/PLAY_SDK.md`](docs/PLAY_SDK.md) — LLM 플레이어 클라이언트 |
 | Unity | [`unity/com.btqa.game`](unity/com.btqa.game) — UPM 패키지 (`Btqa.Game`, Newtonsoft.Json 만) |
 | Python | [`python/btqa_game`](python/btqa_game) — 게임 쪽 (밸런스 서버), 표준 라이브러리만, Python ≥ 3.8 |
-| Python | [`python/btqa_play`](python/btqa_play) — 플레이 모드 클라이언트 (LLM 도구·tool use 루프·relay·LLM 백엔드), 표준 라이브러리만 |
+| Python | [`python/btqa_play`](python/btqa_play) — 플레이 모드 클라이언트 (LLM 도구·tool use 루프·relay·LLM 백엔드·단계 기록·평가·데이터셋), 표준 라이브러리만 |
+| Python (선택) | [`python/btqa_distill`](python/btqa_distill) — 증류: LoRA 학습·GGUF·Ollama(CPU) 등록. **유일하게 외부 의존성**(torch·transformers·peft, `pip install btqa-game[distill]`) — [`docs/DISTILL_SDK.md`](docs/DISTILL_SDK.md) |
 | 변경 이력 | [`CHANGELOG.md`](CHANGELOG.md) |
 
 ## 폴더
@@ -18,7 +19,8 @@ btqa_sdk/
 ├─ docs/            PROTOCOL.md·PLAY_PROTOCOL.md (계약), SDK.md·PLAY_SDK.md (가이드)
 ├─ unity/com.btqa.game/     Unity 패키지 (Runtime/: Wire, Declaration, Host, QaSession, QaServer)
 ├─ python/btqa_game/        Python 패키지 (+ conformance 적합성 검사, examples/minimal_arena 예제 게임)
-├─ python/btqa_play/        플레이 모드 클라이언트 (client·tools·prompt·pilot·relay·llm/)
+├─ python/btqa_play/        플레이 모드 클라이언트 (client·tools·prompt·pilot·relay·llm/·actions·record·evaluate·dataset)
+├─ python/btqa_distill/     (선택) 증류 학습·내보내기 (config·train·export)
 ├─ tests/           SDK 자체 테스트
 ├─ pyproject.toml, setup.py   pip 패키지 btqa-game
 └─ CHANGELOG.md
@@ -35,6 +37,8 @@ python -m unittest discover -s tests -t .         # SDK 테스트
 ```
 
 Unity: `unity/com.btqa.game` 을 게임 프로젝트 `Packages/com.btqa.game` 으로 복사 (권장, embedded 패키지 — 또는 manifest 의 `file:` 경로·git URL), 그다음 `IEpisodeHost` 구현 — [`docs/SDK.md`](docs/SDK.md) 3장.
+
+**모델 가중치·어댑터·GGUF 는 원본이든 증류든 이 레포에 커밋하지 않는다** (`.gitignore`, `tests/test_no_model_files.py`).
 
 ## 규칙 한 줄
 

@@ -1,0 +1,10 @@
+# btqa_distill (선택 패키지) — 별도 venv, Python >= 3.10. 프로젝트 venv(3.8, torch 1.8 CPU)와 섞지 않는다.
+#   py -3.12 -m venv venv_distill
+#   venv_distill\Scripts\python.exe -m pip install torch --index-url https://download.pytorch.org/whl/cu124
+#   venv_distill\Scripts\python.exe -m pip install -r btqa_sdk/python/btqa_distill/requirements.txt
+#   venv_distill\Scripts\python.exe -m pip install --no-deps -e ./btqa_sdk
+torch>=2.1
+transformers>=4.44
+peft>=0.12
+safetensors
+# GGUF 변환은 llama.cpp (convert_hf_to_gguf.py 의 requirements 를 따로 설치)

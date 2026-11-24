@@ -12,7 +12,8 @@ SDK 는 이 형식을 검사하고 합치고 변환할 뿐, 내용(문장·게�
       "actions": {"<행동 이름>": {"description": "...", "schema": {"type":"object","properties":{...},"required":[...]}}},
       "meta_tools": {"finish": {"description": "..."}, "inspect_ui": {"description": "..."}},
       "pilot_guide": {"system_prompt": "...", "about": "...", "rules": ["..."], "default_goal": "..."},
-      "progress_keys": ["quests", "player.zone"]          # 진척 판단에 볼 관찰 경로 (점 구분)
+      "progress_keys": ["quests", "player.zone"],         # 진척 판단에 볼 관찰 경로 (점 구분)
+      "observation_drop": ["screen.ui[role=text]"]        # LLM 에게 보이기 전에 뺄 관찰 경로 (입력 길이 — CPU 추론)
     }
 """
 from __future__ import annotations
@@ -23,7 +24,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Union
 
 SPEC_FORMAT = "btqa-play-spec/1"
-SPEC_KEYS = ("format", "actions", "meta_tools", "pilot_guide", "progress_keys")
+SPEC_KEYS = ("format", "actions", "meta_tools", "pilot_guide", "progress_keys", "observation_drop")
 GUIDE_KEYS = ("system_prompt", "about", "rules", "default_goal")
 META_TOOL_NAMES = ("inspect_ui", "finish")
 _JSON_TYPES = ("string", "number", "integer", "boolean", "array", "object", "null")
@@ -75,6 +76,13 @@ def check_progress_keys(where: str, keys: Any) -> List[str]:
     return []
 
 
+def check_observation_drop(where: str, paths: Any) -> List[str]:
+    """관찰에서 뺄 경로: 점 구분 경로, 목록이면 원소마다 적용, 마지막 조각에 [키=값] 필터 가능 (예 screen.ui[role=text])."""
+    if not (isinstance(paths, list) and all(isinstance(p, str) and p for p in paths)):
+        return ["%s 는 문자열 목록 (관찰 경로, 예: \"hidden_included\", \"screen.ui[role=text]\")" % where]
+    return ["%s: 필터 형식 [키=값] 이 아님: %s" % (where, p) for p in paths if "[" in p and not p.endswith("]") or p.count("[") > 1]
+
+
 def validate_spec(d: Mapping[str, Any]) -> List[str]:
     """외부 스펙 dict 검사. 빈 목록 = 통과."""
     if not isinstance(d, Mapping):
@@ -111,6 +119,8 @@ def validate_spec(d: Mapping[str, Any]) -> List[str]:
         out += check_guide("pilot_guide", d["pilot_guide"])
     if "progress_keys" in d:
         out += check_progress_keys("progress_keys", d["progress_keys"])
+    if "observation_drop" in d:
+        out += check_observation_drop("observation_drop", d["observation_drop"])
     return out
 
 
@@ -121,6 +131,7 @@ class PlaySpec:
     meta_tools: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     pilot_guide: Dict[str, Any] = field(default_factory=dict)
     progress_keys: Optional[List[str]] = None
+    observation_drop: List[str] = field(default_factory=list)
     source: str = ""
 
     @classmethod
@@ -132,6 +143,7 @@ class PlaySpec:
                    meta_tools={k: dict(v) for k, v in (d.get("meta_tools") or {}).items()},
                    pilot_guide=dict(d.get("pilot_guide") or {}),
                    progress_keys=list(d["progress_keys"]) if d.get("progress_keys") else None,
+                   observation_drop=list(d.get("observation_drop") or []),
                    source=source)
 
     @classmethod
@@ -167,5 +179,14 @@ def effective_progress_keys(description: Mapping[str, Any], spec: Optional[PlayS
     return (spec or PlaySpec()).progress_keys
 
 
+def effective_observation_drop(description: Mapping[str, Any], spec: Optional[PlaySpec] = None) -> List[str]:
+    """게임 선언 observation_drop 이 있으면 그것, 없으면 외부 스펙 것."""
+    paths = description.get("observation_drop")
+    if isinstance(paths, list) and paths:
+        return [str(p) for p in paths]
+    return list((spec or PlaySpec()).observation_drop)
+
+
 __all__ = ["SPEC_FORMAT", "PlaySpec", "SpecError", "validate_spec", "as_spec", "effective_guide", "effective_progress_keys",
-           "check_schema", "check_guide", "check_progress_keys", "META_TOOL_NAMES"]
+           "effective_observation_drop", "check_schema", "check_guide", "check_progress_keys", "check_observation_drop",
+           "META_TOOL_NAMES"]

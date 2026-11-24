@@ -1,6 +1,6 @@
 # BT-QA Play SDK (`btqa_play`) — LLM 플레이어 클라이언트
 
-> 계약 [`PLAY_PROTOCOL.md`](PLAY_PROTOCOL.md) play v0.3 (+ 2026-11-24 선택 필드 4.2.1). SDK 0.3.0.
+> 계약 [`PLAY_PROTOCOL.md`](PLAY_PROTOCOL.md) play v0.3 (+ 2026-11-24 선택 필드 4.2.1). SDK 0.4.0.
 > Python ≥ 3.8, **표준 라이브러리만**. `anthropic` 백엔드만 anthropic SDK(Python ≥ 3.10)를 그 백엔드 안에서 import.
 
 플레이 모드 = **비전투(이동·대화·퀘스트·UI)는 LLM 이, 전투는 밸런스 QA 로 학습한 BT 가** 한다.
@@ -17,6 +17,9 @@
 | `llm/` | `LlmBackend` 확장 지점 + `AnthropicBackend` / `OpenAICompatBackend`, `load_config`·`make_backend` (`llm.json`) |
 | `pilot.py: LlmPilot` | LLM tool use 루프 (행동·호출·진척 없음 상한, LLM 텍스트 → `pilot_note`) |
 | `relay.py: PilotRelay` | 대화형 에이전트(Claude Code 등)가 직접 플레이어 — API 호출 없음. `step` 으로 한 행동씩 |
+| `actions.py` | **단계 형식** (작은 로컬 모델·증류): [고정 system, 지금 관찰 + 직전 행동 결과] → JSON 행동 1개. `action_schema`·`parse_action`·`step_input` |
+| `llm/json_action.py` | `JsonActionBackend` (`tool_mode: json`) — 출력 JSON 을 스키마로 강제 (Ollama·llama.cpp) |
+| `record.py` | `StepRecorder` 단계 기록 JSONL (`btqa-play-step/1`) + `grounding_issues` |
 | `__main__.py` | `python -m btqa_play tools / spec / play / relay / step` (`--spec` 외부 스펙) |
 
 **SDK 밖 (쓰는 쪽이 만든다)**: 전투 로드아웃(`set_loadout` 항목)과 **전투 응답기**. 학습 결과 파일 형식·정책 실행(numpy 등)에 묶이기 때문이다.
@@ -112,6 +115,24 @@ SDK 는 특정 LLM·키를 들고 있지 않다. 예시 `btqa_play/llm.example.j
 
 새 백엔드: `llm/base.py: LlmBackend` 상속 (`start / complete / add_tool_results / add_user`) → `llm/__init__.py: make_backend` 에 등록. 도구는 중립 형식 `{name, description, input_schema, strict}` 로 들어온다.
 
+## 4.1 작은 로컬 모델 (CPU)
+
+```bash
+ollama pull qwen2.5:1.5b
+python -m btqa_play play --game 127.0.0.1:7800 --llm openai --model qwen2.5:1.5b --tool-mode json --stateless [--record steps.jsonl]
+```
+
+- `--stateless`: 단계마다 새 대화 = [system, 지금 관찰 + 직전 행동 결과]. system 은 판 내내 같은 글자라 llama.cpp/Ollama 가 앞부분 계산을 재사용한다 → CPU 에서도 단계마다 새로 읽는 것은 관찰뿐.
+- `--tool-mode json`: 출력이 `{"thought","tool","input"}` JSON 하나로 강제된다 (서버가 `response_format: json_schema` 를 지원해야 함 — Ollama 0.5+). 형식이 깨지면 `PilotRun.invalid_outputs` 에 세고 다음 단계 입력의 `last_action.error` 로 알린다.
+- 입력을 더 줄이려면 스펙·게임 선언의 `observation_drop` (2.1).
+
+## 4.2 증류 데이터 (교사 → 작은 모델)
+
+- 교사 = 대화형 에이전트: `python -m btqa_play relay --game ... --record teacher.jsonl` → `step intro` 의 `system`·`step_input` 을 읽고, 매 행동 응답의 `step_input`(학생이 받을 입력 그대로)만 보고 다음 행동을 정한다. `--think` = 학습 목표의 thought.
+- 한 줄 = 학습 샘플 하나: `messages`(system·user) + `target_text`(assistant). `grounding` 이 비어 있지 않은 줄은 학생 입력에 근거가 없는 판단이므로 빼거나 검토한다.
+- 모델 기록 (`play --record`) 도 같은 형식 — 평가·교정(DAgger) 데이터.
+- 평가 `python -m btqa_play batch` (evaluate.run_batch), 학습 데이터 `python -m btqa_play dataset` (dataset.build_dataset), 학습·내보내기는 선택 패키지 `btqa_distill` — [`DISTILL_SDK.md`](DISTILL_SDK.md).
+
 ## 5. 결과
 
 `LlmPilot.run()` → `PilotRun` (끝난 이유 `finish`/`max_actions`/`max_calls`/`no_progress`/`game_error: ...`, finish 요약, 전투 요약, 토큰, 대화 기록). `PilotRelay` 는 `<out>/relay-<시각>/run.json`·`play_log.json`.
@@ -121,7 +142,7 @@ SDK 는 특정 LLM·키를 들고 있지 않다. 예시 `btqa_play/llm.example.j
 
 | | |
 |---|---|
-| `btqa_play` / `btqa_game` / `com.btqa.game` | 0.3.0 (레포 하나, 같은 버전 — `tests/test_play.py`·`test_sdk.py` 가 검사) |
+| `btqa_play` / `btqa_game` / `com.btqa.game` | 0.4.0 (레포 하나, 같은 버전 — `tests/test_play.py`·`test_sdk.py` 가 검사) |
 | 플레이 프로토콜 | 0.3 (`PlayClient` 는 0.2·0.1 게임에도 접속, 메모는 0.3 만) |
 
 ## 7. 다음 (아직 없음)

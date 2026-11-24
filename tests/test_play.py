@@ -163,7 +163,7 @@ class ToolsTest(unittest.TestCase):
         self.assertEqual(validate_description(desc, require_text=False), [])
 
     def test_sdk_module_has_no_game_vocabulary(self):
-        src = "".join((ROOT / "python" / "btqa_play" / f).read_text(encoding="utf-8") for f in ("tools.py", "prompt.py", "pilot.py"))
+        src = "".join((ROOT / "python" / "btqa_play" / f).read_text(encoding="utf-8") for f in ("tools.py", "prompt.py", "pilot.py", "actions.py", "record.py", "llm/json_action.py"))
         for word in ("move_to", "interact", "퀘스트", "퀵슬롯", "골드", "물약", "dialog_closed", "talk|"):
             self.assertNotIn(word, src, "SDK 코드에 게임 내용: %s" % word)
 
@@ -327,7 +327,7 @@ class RelayTest(unittest.TestCase):
 class StandaloneTest(unittest.TestCase):
     def test_play_sdk_uses_only_stdlib(self):
         allowed = set(sys.builtin_module_names) | {"btqa_play", "__future__", "abc", "argparse", "dataclasses", "json", "os",
-                                                    "socket", "sys", "time", "typing", "pathlib", "urllib"}
+                                                    "socket", "sys", "time", "typing", "pathlib", "urllib", "math", "hashlib", "random"}
         lazy = {"anthropic"}   # AnthropicBackend 안에서만
         bad = []
         for path in (ROOT / "python" / "btqa_play").rglob("*.py"):

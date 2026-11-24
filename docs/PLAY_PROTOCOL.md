@@ -128,6 +128,7 @@
 | `actions[].description`, `actions[].schema` | (선택, 2026-11-24) LLM 도구 설명·인자 JSON Schema — 4.2.1 |
 | `pilot_guide` | (선택, 2026-11-24) LLM 플레이어에게 줄 게임 안내 — 4.2.1 |
 | `progress_keys` | (선택, 2026-11-24) LLM 진척 판단에 볼 관찰 경로 — 4.2.1 |
+| `observation_drop` | (선택, 2026-11-24) LLM 에게 보이기 전에 뺄 관찰 경로 — 4.2.1 |
 
 #### 4.2.1 LLM 도구·안내 선언 (선택 필드)
 
@@ -172,6 +173,7 @@
 | `pilot_guide.rules` | 이 게임만의 플레이 요령 (문자열 목록). `about` 과 함께 "<game> 안내:" 블록이 된다 |
 | `pilot_guide.default_goal` | 목표를 따로 주지 않았을 때 LLM 목표 (문자열) |
 | `progress_keys` | 진척 판단에 볼 관찰 경로 목록 (점 구분, 예 `player.zone`). 이 값들이 N 행동 동안 안 바뀌면 LLM 루프가 `no_progress` 로 멈춘다. 없으면 관찰 전체에서 매 행동 바뀌는 필드(`seq`·`game_time`·`events`·`entities`·`player.pos`)를 뺀 것 |
+| `observation_drop` | LLM 에게 보이기 전에 관찰에서 뺄 경로 목록 (입력 길이 — 작은 로컬 모델 CPU 추론). `a.b` = 키, 목록이면 원소마다, 마지막 조각 `name[k=v]` = 목록에서 k==v 인 원소만 (예 `"screen.ui[role=text]"`). 결정에 필요한 것은 빼지 않는다 |
 | 그 밖의 키 | `pilot_guide` 에 다른 키 → 클라이언트 검사(`python -m btqa_play tools`)가 문제로 보고한다 |
 
 - 세션 동안 바꾸지 않는다 (LLM 프롬프트 캐시). 플레이어에게 보이지 않는 정보(숨은 좌표 등)를 `rules` 에 넣지 않는다 — 원칙 "플레이어가 지각 가능한 것만" (1장). 사람 플레이어가 튜토리얼·도움말에서 알 수 있는 정도까지.
