@@ -65,7 +65,7 @@ class StepRecorder:
 
     def write(self, system: str, user: str, observation: Mapping[str, Any], thought: str, tool: str,
               tool_input: Mapping[str, Any], result: Mapping[str, Any], usage: Optional[Mapping[str, int]] = None,
-              latency_s: Optional[float] = None) -> Dict[str, Any]:
+              latency_s: Optional[float] = None, extra: Optional[Mapping[str, Any]] = None) -> Dict[str, Any]:
         self.step += 1
         g = grounding_issues(user, observation, tool_input)
         self.flagged += bool(g)
@@ -75,6 +75,8 @@ class StepRecorder:
                "target": {"thought": thought, "tool": tool, "input": dict(tool_input)},
                "target_text": action_text(thought, tool, tool_input),
                "result": dict(result), "usage": dict(usage or {}), "latency_s": latency_s, "grounding": g}
+        if extra:
+            rec.update({k: v for k, v in extra.items() if k not in rec})   # 예 student = 교정 모드 학생 제안 (DPO 의 rejected)
         with self.path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
         return rec

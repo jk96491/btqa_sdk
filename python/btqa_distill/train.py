@@ -18,15 +18,25 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
-from btqa_distill.config import TrainConfig
+from btqa_distill.config import TrainConfig, load_causal_lm
 from btqa_play.dataset import read_samples, split_prompt
+
+
+def _ids(x: Any) -> List[int]:
+    """apply_chat_template 결과 → 토큰 목록 (transformers 5 는 BatchEncoding/dict 를 돌려준다)."""
+    if hasattr(x, "keys") and "input_ids" in x.keys():
+        x = x["input_ids"]
+    x = list(x)
+    if x and isinstance(x[0], (list, tuple)):   # 배치 1개
+        x = list(x[0])
+    return [int(t) for t in x]
 
 
 def encode(tok: Any, sample: Dict[str, Any]) -> Tuple[List[int], List[int]]:
     """(input_ids, labels) — labels 는 프롬프트 부분 -100."""
     prompt_msgs, target = split_prompt(sample)
-    full = tok.apply_chat_template(prompt_msgs + [{"role": "assistant", "content": target}], tokenize=True)
-    prompt = tok.apply_chat_template(prompt_msgs, tokenize=True, add_generation_prompt=True)
+    full = _ids(tok.apply_chat_template(prompt_msgs + [{"role": "assistant", "content": target}], tokenize=True))
+    prompt = _ids(tok.apply_chat_template(prompt_msgs, tokenize=True, add_generation_prompt=True))
     if list(full[:len(prompt)]) != list(prompt):
         raise ValueError("chat template 이 프롬프트를 접두사로 만들지 않는다 — 이 모델 템플릿은 지원 밖")
     full = list(full)
@@ -57,7 +67,7 @@ def train_lora(cfg: TrainConfig, train_path: Union[str, Path], val_path: Optiona
                log_every: int = 10) -> Path:
     import torch
     from peft import LoraConfig, get_peft_model
-    from transformers import AutoModelForCausalLM, AutoTokenizer
+    from transformers import AutoTokenizer
 
     cfg.validate()
     random.seed(cfg.seed)
@@ -85,7 +95,7 @@ def train_lora(cfg: TrainConfig, train_path: Union[str, Path], val_path: Optiona
     if not train:
         raise ValueError("학습 샘플이 없다 (max_len=%d 보다 모두 길거나 파일이 비었다)" % cfg.max_len)
 
-    model = AutoModelForCausalLM.from_pretrained(cfg.base_model, torch_dtype=dtype)
+    model = load_causal_lm(cfg.base_model, dtype)
     if cfg.gradient_checkpointing:
         model.gradient_checkpointing_enable()
         model.enable_input_require_grads()

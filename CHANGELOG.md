@@ -1,5 +1,14 @@
 # 변경 이력
 
+## 미배포 (0.4.x) — 2026-11-25
+
+증류 후반 단계 (프로토콜·`btqa_game`·Unity 패키지 변화 없음).
+
+- DAgger: `PilotRelay(student=...)` + `step --execute student` — 학생 행동을 실행하고 교사 라벨을 기록 (`extra.student`)
+- `dataset.build_pairs` → 선호 쌍 `btqa-play-pref/1` (교사가 학생과 다르게 고른 단계: chosen=교사, rejected=학생). `build_dataset` 통계에 thought 표현 차이(`thought_variants`)를 충돌과 따로 셈
+- `btqa_distill.dpo.train_dpo` (참조 = 어댑터 끈 같은 모델), `btqa_distill.rft.train_rft` (GRPO, 게임 = 채점기, scratch 게임에서 seed+prefix 재생으로 분기, reward_fn 은 게임 쪽이 준다)
+- transformers 5 대응: `apply_chat_template` BatchEncoding (`train._ids`), `config.load_causal_lm` (`dtype`/`torch_dtype`)
+
 ## 0.4.0 — 2026-11-24
 
 **작은 로컬 LLM(CPU 추론)·증류용 단계 형식** (`btqa_play`). 밸런스 프로토콜 1.4·플레이 0.3 그대로, `btqa_game`·Unity 패키지 코드 변화 없음 (버전만).

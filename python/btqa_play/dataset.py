@@ -10,7 +10,8 @@
     - source 가 sources 에 없는 줄 (기본 teacher 만 — model 기록은 평가용, 교정 데이터는 source=teacher 로 기록)
     - grounding 이 비어 있지 않은 줄 (학생 입력에 근거가 없는 판단 — 배울 수 없다)
     - 출력 형식 오류·모르는 도구 (target.tool 이 비었거나 result.error 가 형식 오류)
-    - 중복: 같은 (system, user) → 같은 target 은 하나만. 같은 입력에 다른 target 이 있으면 모두 남기고 stats 에 센다
+    - 중복: 같은 (system, user) → 같은 target 글은 하나만. 같은 입력·같은 행동에 생각 문장만 다르면 남기고 thought_variants 로,
+      같은 입력에 다른 행동이면 남기고 conflicting_inputs 로 센다 (검토 대상)
 나누기: **판(run) 단위**로 val 을 뗀다 (같은 판의 이웃 단계가 train·val 에 섞이면 val 이 낙관적이 된다).
 """
 from __future__ import annotations
@@ -64,8 +65,9 @@ def build_dataset(inputs: Sequence[Union[str, Path]], out_dir: Union[str, Path],
     for p in inputs:
         recs += read_steps(p)
     dropped: Dict[str, int] = {}
-    seen: Dict[str, str] = {}
-    conflicts = 0
+    seen_text: Dict[str, set] = {}     # 입력 → 본 목표 글 (thought 포함) — 완전 중복 판정
+    seen_act: Dict[str, set] = {}      # 입력 → 본 행동 (tool+input) — 진짜 충돌 판정
+    conflicts = thought_variants = 0
     kept: List[Dict[str, Any]] = []
     for r in recs:
         why = _reason_to_drop(r, sources, keep_ungrounded)
@@ -73,13 +75,18 @@ def build_dataset(inputs: Sequence[Union[str, Path]], out_dir: Union[str, Path],
             dropped[why] = dropped.get(why, 0) + 1
             continue
         k_in = _key(r["messages"][0]["content"], r["messages"][1]["content"])
-        k_out = _key(r["target_text"])
-        if k_in in seen:
-            if seen[k_in] == k_out:
-                dropped["duplicate"] = dropped.get("duplicate", 0) + 1
-                continue
-            conflicts += 1
-        seen[k_in] = k_out
+        k_text = _key(r["target_text"])
+        k_act = _key(r["target"]["tool"], json.dumps(r["target"].get("input") or {}, sort_keys=True, ensure_ascii=False))
+        if k_text in seen_text.get(k_in, set()):
+            dropped["duplicate"] = dropped.get("duplicate", 0) + 1
+            continue
+        if k_in in seen_act:
+            if k_act in seen_act[k_in]:
+                thought_variants += 1      # 같은 입력·같은 행동, 생각 문장만 다름 — 남긴다 (표현 다양성)
+            else:
+                conflicts += 1             # 같은 입력에 다른 행동 — 학습 신호가 엇갈린다 (검토)
+        seen_text.setdefault(k_in, set()).add(k_text)
+        seen_act.setdefault(k_in, set()).add(k_act)
         kept.append(r)
 
     runs = sorted({str(r.get("run")) for r in kept})
@@ -105,12 +112,52 @@ def build_dataset(inputs: Sequence[Union[str, Path]], out_dir: Union[str, Path],
     for s in train + val:
         tools[s["meta"]["tool"]] = tools.get(s["meta"]["tool"], 0) + 1
     stats = {"format": DATASET_FORMAT, "inputs": [str(p) for p in inputs], "read": len(recs), "kept": len(kept),
-             "dropped": dropped, "conflicting_inputs": conflicts, "runs": len(runs), "val_runs": sorted(val_runs),
+             "dropped": dropped, "conflicting_inputs": conflicts, "thought_variants": thought_variants, "runs": len(runs), "val_runs": sorted(val_runs),
              "train": len(train), "val": len(val), "tools": tools,
              "mean_chars": {"user": _mean(train + val, 1), "assistant": _mean(train + val, 2)},
              "distinct_systems": len({s["messages"][0]["content"] for s in train + val})}
     (out / "stats.json").write_text(json.dumps(stats, ensure_ascii=False, indent=2), encoding="utf-8")
     return stats
+
+
+PAIR_FORMAT = "btqa-play-pref/1"
+
+
+def build_pairs(inputs: Sequence[Union[str, Path]], out_path: Union[str, Path], keep_ungrounded: bool = False) -> Dict[str, Any]:
+    """교정(DAgger) 기록 → 선호 쌍 (DPO). 한 줄 = {"prompt": [system, user], "chosen": 교사 정답 글, "rejected": 학생 제안 글}.
+
+    학생 제안(rec.student)이 있고 교사 정답과 **행동(tool·input)이 다른** 단계만. 학생 출력이 형식 오류면 rejected 로 쓰지 않는다
+    (형식은 JSON 강제가 맡는다). grounding 표시된 교사 정답은 기본으로 뺀다.
+    """
+    from btqa_play.actions import action_text
+    recs: List[Dict[str, Any]] = []
+    for p in inputs:
+        recs += read_steps(p)
+    pairs, skipped = [], {"no_student": 0, "same_action": 0, "student_error": 0, "ungrounded": 0, "invalid": 0}
+    for r in recs:
+        st = r.get("student")
+        if not st:
+            skipped["no_student"] += 1
+            continue
+        if _reason_to_drop(r, ("teacher",), keep_ungrounded):
+            skipped["ungrounded" if r.get("grounding") else "invalid"] += 1
+            continue
+        if not st.get("tool"):
+            skipped["student_error"] += 1
+            continue
+        t = r["target"]
+        if (st["tool"], json.dumps(st.get("input") or {}, sort_keys=True)) == (t["tool"], json.dumps(t.get("input") or {}, sort_keys=True)):
+            skipped["same_action"] += 1
+            continue
+        pairs.append({"format": PAIR_FORMAT, "prompt": [dict(m) for m in r["messages"]], "chosen": r["target_text"],
+                      "rejected": action_text(st.get("thought") or "", st["tool"], st.get("input") or {}),
+                      "meta": {"run": r.get("run"), "step": r.get("step"), "chosen_tool": t["tool"], "rejected_tool": st["tool"]}})
+    out = Path(out_path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    with out.open("w", encoding="utf-8") as f:
+        for x in pairs:
+            f.write(json.dumps(x, ensure_ascii=False) + "\n")
+    return {"format": PAIR_FORMAT, "read": len(recs), "pairs": len(pairs), "skipped": skipped}
 
 
 def read_samples(path: Union[str, Path]) -> List[Dict[str, Any]]:
@@ -123,4 +170,4 @@ def split_prompt(sample: Dict[str, Any]) -> Tuple[List[Dict[str, str]], str]:
     return [dict(x) for x in m[:-1]], m[-1]["content"]
 
 
-__all__ = ["DATASET_FORMAT", "build_dataset", "to_sample", "read_samples", "split_prompt"]
+__all__ = ["DATASET_FORMAT", "PAIR_FORMAT", "build_dataset", "build_pairs", "to_sample", "read_samples", "split_prompt"]

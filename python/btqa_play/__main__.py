@@ -106,7 +106,7 @@ def cmd_play(a: argparse.Namespace) -> int:
 
 def cmd_relay(a: argparse.Namespace) -> int:
     PilotRelay(a.game, seed=a.seed, cls=a.cls, port=a.port, out=a.out, spec=_spec(a),
-               stateless=a.stateless, record=a.record).serve()
+               stateless=a.stateless, record=a.record, student=student_backend(a.student, a.student_url)).serve()
     return 0
 
 
@@ -139,14 +139,22 @@ def cmd_dataset(a: argparse.Namespace) -> int:
     from btqa_play.dataset import build_dataset
     st = build_dataset(a.inputs, a.out, val_ratio=a.val_ratio, seed=a.seed, sources=tuple(a.sources),
                        keep_ungrounded=a.keep_ungrounded)
-    print(json.dumps({k: st[k] for k in ("read", "kept", "dropped", "conflicting_inputs", "runs", "train", "val", "tools")},
+    print(json.dumps({k: st[k] for k in ("read", "kept", "dropped", "conflicting_inputs", "thought_variants", "runs", "train", "val", "tools")},
                      ensure_ascii=False))
     print("→", a.out, "(train.jsonl / val.jsonl / stats.json) — git 제외 경로에 둘 것")
     return 0
 
 
+def student_backend(model: Optional[str], base_url: str):
+    """교정 모드 학생 (OpenAI 호환 + JSON 행동 강제). model 없으면 None."""
+    if not model:
+        return None
+    from btqa_play.llm.json_action import JsonActionBackend
+    return JsonActionBackend(model, base_url=base_url, max_tokens=300, temperature=0.0)
+
+
 def cmd_step(a: argparse.Namespace) -> int:
-    print(relay_step(a.tool, json.loads(a.input or "{}"), port=a.port, thought=a.think, kind=a.kind))
+    print(relay_step(a.tool, json.loads(a.input or "{}"), port=a.port, thought=a.think, kind=a.kind, execute=a.execute))
     return 0
 
 
@@ -194,6 +202,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--spec", help="외부 플레이 스펙 파일")
     p.add_argument("--stateless", action="store_true", help="단계 형식: 응답에 학생과 같은 다음 단계 입력만")
     p.add_argument("--record", help="교사 데이터 JSONL (stateless 를 켠다)")
+    p.add_argument("--student", help="교정 모드: 학생 모델 이름 (OpenAI 호환, 예 Ollama qa-qwen1.5b-r1) — view 에 학생 제안")
+    p.add_argument("--student-url", default="http://localhost:11434/v1")
     p.set_defaults(fn=cmd_relay)
 
     p = sub.add_parser("batch", help="같은 LLM 으로 여러 seed 평가 → summary.json")
@@ -231,6 +241,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--think")
     p.add_argument("--kind", default="thought", choices=["thought", "plan", "finding"])
     p.add_argument("--port", type=int, default=DEFAULT_RELAY_PORT)
+    p.add_argument("--execute", choices=["student"], help="교정 모드: 정답만 기록하고 게임에는 학생 제안을 실행")
     p.set_defaults(fn=cmd_step)
 
     a = ap.parse_args(argv)

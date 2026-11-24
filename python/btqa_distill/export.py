@@ -27,10 +27,11 @@ QUANTS = ("Q4_K_M", "Q5_K_M", "Q8_0", "F16")
 def merge(base_model: str, adapter_dir: PathLike, out_dir: PathLike, dtype: str = "float16") -> Path:
     import torch
     from peft import PeftModel
-    from transformers import AutoModelForCausalLM, AutoTokenizer
+    from transformers import AutoTokenizer
 
     out = Path(out_dir)
-    model = AutoModelForCausalLM.from_pretrained(base_model, torch_dtype=getattr(torch, dtype))
+    from btqa_distill.config import load_causal_lm
+    model = load_causal_lm(base_model, getattr(torch, dtype))
     model = PeftModel.from_pretrained(model, str(adapter_dir)).merge_and_unload()
     model.save_pretrained(str(out), safe_serialization=True)
     AutoTokenizer.from_pretrained(str(adapter_dir)).save_pretrained(str(out))

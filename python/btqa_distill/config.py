@@ -62,3 +62,12 @@ class TrainConfig:
 
 
 __all__ = ["TrainConfig", "QWEN_TARGETS"]
+
+
+def load_causal_lm(name: str, dtype):
+    """transformers 4.x(torch_dtype=) / 5.x(dtype=) 모두."""
+    from transformers import AutoModelForCausalLM
+    try:
+        return AutoModelForCausalLM.from_pretrained(name, dtype=dtype)
+    except TypeError:
+        return AutoModelForCausalLM.from_pretrained(name, torch_dtype=dtype)

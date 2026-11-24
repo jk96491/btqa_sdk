@@ -176,5 +176,37 @@ class RelayRecordTest(unittest.TestCase):
         self.assertEqual((run["mode"], run["record_steps"]), ("stateless", 2))
 
 
+class DaggerRelayTest(unittest.TestCase):
+    def test_label_recorded_student_action_executed(self):
+        g = FakePlayGame(actions=[GAME_SCHEMA_MOVE, {"name": "wait", "args": {"seconds": "n"}}])
+        student_move = '{"thought":"학생은 여기로","tool":"move_to","input":{"target":null,"pos":[0,0,32]}}'
+        student = JsonActionBackend("s", post=FakePost([student_move, student_move, student_move]))
+        with socket.socket() as s:
+            s.bind(("127.0.0.1", 0))
+            port = s.getsockname()[1]
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "dagger.jsonl"
+            relay = PilotRelay(g.endpoint, port=port, out=d, record=path, student=student)
+            th = threading.Thread(target=lambda: setattr(relay, "saved", relay.serve()), daemon=True)
+            th.start()
+            for _ in range(200):
+                try:
+                    view = json.loads(relay_step("view", {}, port=port))
+                    break
+                except OSError:
+                    threading.Event().wait(0.02)
+            self.assertEqual(view["student"]["tool"], "move_to")                          # 학생 제안이 보인다
+            out = json.loads(relay_step("wait", {"seconds": 1, "until": None}, port=port, thought="정답은 기다리기",
+                                        execute="student"))
+            self.assertEqual(out["result"]["tool"], "move_to")                             # 게임에는 학생 행동
+            relay_step("finish", {"success": True, "summary": "ok", "blocked": None}, port=port, thought="끝")
+            th.join(5)
+            steps = read_steps(path)
+        acts = [m for m in g.received if m["type"] == "act"]
+        self.assertEqual([a["action"] for a in acts], ["move_to"])
+        self.assertEqual((steps[0]["target"]["tool"], steps[0]["target"]["thought"]), ("wait", "정답은 기다리기"))   # 기록은 교사 정답
+        self.assertEqual(steps[0]["result"]["executed"], "student")
+
+
 if __name__ == "__main__":
     unittest.main()
