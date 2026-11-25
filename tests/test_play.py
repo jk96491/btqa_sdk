@@ -327,7 +327,8 @@ class RelayTest(unittest.TestCase):
 class StandaloneTest(unittest.TestCase):
     def test_play_sdk_uses_only_stdlib(self):
         allowed = set(sys.builtin_module_names) | {"btqa_play", "__future__", "abc", "argparse", "dataclasses", "json", "os",
-                                                    "socket", "sys", "time", "typing", "pathlib", "urllib", "math", "hashlib", "random"}
+                                                    "socket", "sys", "time", "typing", "pathlib", "urllib", "math", "hashlib", "random",
+                                                    "importlib"}   # importlib = hooks.load_hook (게임 쪽 함수 이름으로 불러오기)
         lazy = {"anthropic"}   # AnthropicBackend 안에서만
         bad = []
         for path in (ROOT / "python" / "btqa_play").rglob("*.py"):

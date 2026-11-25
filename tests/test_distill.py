@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "python"))
 
 from btqa_distill.config import TrainConfig  # noqa: E402
-from btqa_distill.export import cpu_variant_modelfile, modelfile_text  # noqa: E402
+from btqa_distill.export import cpu_variant_modelfile, gpu_variant_modelfile, modelfile_text  # noqa: E402
 from btqa_distill.train import encode  # noqa: E402
 from btqa_play import PilotConfig, PlayClient, StepRecorder, build_dataset, parse_seeds, run_batch  # noqa: E402
 from btqa_play.dataset import read_samples  # noqa: E402
@@ -70,6 +70,52 @@ class DatasetTest(unittest.TestCase):
         self.assertEqual([m["role"] for m in s0["messages"]], ["system", "user", "assistant"])
         self.assertEqual(json.loads(s0["messages"][2]["content"])["tool"], "move_to")
 
+    def test_corrections_weighted_prep_hook_and_pairs(self):
+        from btqa_play.dataset import build_pairs, is_correction
+        from btqa_play.hooks import load_hook
+
+        def rec(run, step, user, tool, inp, student=None, edited=False):
+            t = {"thought": "t%d" % step, "tool": tool, "input": inp}
+            r = {"format": "btqa-play-step/1", "run": run, "step": step, "source": "teacher",
+                 "messages": [{"role": "system", "content": "S"}, {"role": "user", "content": user}], "target": t,
+                 "target_text": json.dumps(t, ensure_ascii=False), "result": {"status": "done"}, "grounding": []}
+            if student:
+                r["student"] = student
+            if edited:
+                r["edited"] = "고침"
+            return r
+
+        same = {"thought": "s", "tool": "wait", "input": {"seconds": 1, "until": None}}
+        other = {"thought": "s", "tool": "move_to", "input": {"target": "a"}}
+        rows = [rec("d1", 1, "u1", "wait", {"seconds": 1}, student=same),            # 학생 = 정답 (None 인자는 무시) → 교정 아님
+                rec("d1", 2, "u2", "wait", {"seconds": 1}, student=other),           # 다른 행동 → 교정
+                rec("d1", 3, "u3", "move_to", {"target": "a"}, student=other, edited=True),   # 고친 승인 → 교정
+                rec("v1", 1, "u4", "wait", {"seconds": 2})]
+        self.assertEqual([is_correction(r) for r in rows], [False, True, True, False])
+
+        def prep(s):
+            s = dict(s)
+            s["messages"] = s["messages"][:-1] + [{"role": "assistant", "content": "P:" + s["messages"][-1]["content"]}]
+            return s
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "dagger.jsonl"
+            p.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows), encoding="utf-8")
+            st = build_dataset([p], Path(d) / "ds", val_runs=["v1"], correction_weight=3, prep=prep)
+            train = read_samples(Path(d) / "ds" / "train.jsonl")
+            val = read_samples(Path(d) / "ds" / "val.jsonl")
+            ps = build_pairs([p], Path(d) / "pairs.jsonl", prep=lambda x: dict(x, chosen="C"))
+            pairs = read_samples(Path(d) / "pairs.jsonl")
+        self.assertEqual((st["corrections"], st["train"], st["val"]), (2, 1 + 2 * 3, 1))
+        self.assertTrue(all(s["messages"][-1]["content"].startswith("P:") for s in train + val))   # train·val 모두 전처리
+        self.assertEqual((ps["pairs"], ps["skipped"]["same_action"]), (1, 2))   # 행동이 같은 단계(고친 승인 포함)는 쌍 아님
+        self.assertEqual(pairs[0]["chosen"], "C")
+        self.assertIs(load_hook("json:dumps"), json.dumps)
+        self.assertIsNone(load_hook(None))
+        with self.assertRaises(ValueError):
+            load_hook("json.dumps")
+        with self.assertRaises(ValueError):
+            build_dataset([p], Path(d) / "x", correction_weight=0)
+
 
 class FakeTok:
     """apply_chat_template 흉내: 메시지마다 [role 토큰, 글자 코드..., 끝 토큰]."""
@@ -106,6 +152,7 @@ class DistillPureTest(unittest.TestCase):
         self.assertIn('TEMPLATE """{{ .Prompt }}"""', t)
         self.assertNotIn("num_gpu", modelfile_text("m.gguf", cpu=False))
         self.assertIn("FROM qwen2.5:1.5b\nPARAMETER num_gpu 0", cpu_variant_modelfile("qwen2.5:1.5b"))
+        self.assertEqual(gpu_variant_modelfile("qa-r8"), "FROM qa-r8\nPARAMETER num_gpu 99\n")
 
 
 class BoundaryTest(unittest.TestCase):

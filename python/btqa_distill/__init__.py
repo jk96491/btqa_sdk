@@ -7,7 +7,7 @@ btqa_play 가 만든 데이터를 쓴다:
     config.TrainConfig   학습 설정 (JSON)
     train.train_lora     LoRA 학습 (GPU 권장) → 어댑터
     export               merge → GGUF(llama.cpp) → 양자화 → Ollama 등록 (CPU 전용, num_gpu 0)
-    python -m btqa_distill check|train|merge|gguf|ollama|cpu-variant
+    python -m btqa_distill check|train|merge|gguf|ollama|export|cpu-variant|gpu-variant|dpo|rft
 
 **선택 패키지 — SDK 에서 유일하게 외부 의존성이 있다**: torch(CUDA)·transformers·peft (requirements.txt, Python ≥ 3.10 별도 venv).
 최상위 import 는 표준 라이브러리만 (무거운 의존성은 함수 안에서) — btqa_play·btqa_game 은 이 패키지를 import 하지 않는다.

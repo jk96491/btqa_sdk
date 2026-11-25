@@ -229,4 +229,22 @@ def relay_step(tool: str, tool_input: Mapping[str, Any], port: int = DEFAULT_REL
         return s.makefile("rb").readline().decode("utf-8").strip()
 
 
-__all__ = ["PilotRelay", "relay_step", "DEFAULT_RELAY_PORT"]
+def relay_approve(n: int = 1, port: int = DEFAULT_RELAY_PORT) -> List[Dict[str, Any]]:
+    """교정 모드: 학생 제안을 정답으로 승인 (교사 = 학생과 같은 행동, 생각 문장도 학생 것) 을 n 번. 각 응답(dict) 목록.
+
+    한 번에 여러 개 승인하면 학생의 틀린 행동을 놓치기 쉽다 (n 은 확실한 구간에만). 학생 제안이 없거나 판이 끝나면 멈춘다.
+    생각 문장의 게임 고유 접두(상황 읽기 등)는 학습 데이터를 만들 때 prep 훅이 입력에서 다시 만든다."""
+    out: List[Dict[str, Any]] = []
+    for _ in range(n):
+        st = (json.loads(relay_step("view", {}, port=port)).get("student") or {})
+        if not st.get("tool"):
+            out.append({"error": "학생 제안 없음", "student": st})
+            break
+        r = json.loads(relay_step(st["tool"], st.get("input") or {}, port=port, thought=st.get("thought") or None, execute="student"))
+        out.append(r)
+        if "step_input" not in r:
+            break
+    return out
+
+
+__all__ = ["PilotRelay", "relay_step", "relay_approve", "DEFAULT_RELAY_PORT"]

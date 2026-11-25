@@ -8,7 +8,9 @@
            증류 교사 데이터: --record teacher.jsonl (학생과 같은 단계 입력만 보고 판단)
     step   <tool> ['<json>'] [--think "..."] [--kind plan]   relay 에 도구 호출 1개
     batch  --game HOST:PORT --seeds 1-5 --llm openai --model M --tool-mode json --stateless [--record]   여러 seed 평가 → summary.json
-    dataset <기록.jsonl ...> --out <폴더>      단계 기록 → 학습용 train/val (증류, 학습은 python -m btqa_distill)
+    approve [N]                              교정(DAgger) 모드: 학생 제안을 그대로 정답으로 승인 N번 (확실한 구간에만)
+    dataset <기록.jsonl ...> --out <폴더> [--correction-weight 3] [--prep 모듈:함수]   단계 기록 → 학습용 train/val (증류)
+    pairs   <교정 기록.jsonl ...> --out pairs.jsonl [--prep 모듈:함수]   교정 기록 → DPO 선호 쌍
 
 tools·play·relay 의 --spec F: 게임이 아직 선언하지 않은 행동 설명·스키마·안내를 외부 스펙 파일(btqa-play-spec/1)로 채운다.
 전투 로드아웃·학습된 응답기가 필요하면 이 SDK 위에 쓰는 쪽 클라이언트를 만든다 (예: AI_QA 의 play_agent).
@@ -26,7 +28,7 @@ from btqa_play.client import PlayClient
 from btqa_play.prompt import build_system_prompt, default_goal
 from btqa_play.record import StepRecorder
 from btqa_play.spec import PlaySpec, SpecError, as_spec, validate_spec
-from btqa_play.relay import DEFAULT_RELAY_PORT, PilotRelay, relay_step
+from btqa_play.relay import DEFAULT_RELAY_PORT, PilotRelay, relay_approve, relay_step
 from btqa_play.tools import build_tools, tool_sources, validate_description
 
 
@@ -137,11 +139,28 @@ def cmd_batch(a: argparse.Namespace) -> int:
 
 def cmd_dataset(a: argparse.Namespace) -> int:
     from btqa_play.dataset import build_dataset
+    from btqa_play.hooks import load_hook
     st = build_dataset(a.inputs, a.out, val_ratio=a.val_ratio, seed=a.seed, sources=tuple(a.sources),
-                       keep_ungrounded=a.keep_ungrounded, val_runs=a.val_runs)
-    print(json.dumps({k: st[k] for k in ("read", "kept", "dropped", "conflicting_inputs", "thought_variants", "runs", "train", "val", "tools")},
-                     ensure_ascii=False))
+                       keep_ungrounded=a.keep_ungrounded, val_runs=a.val_runs, correction_weight=a.correction_weight,
+                       prep=load_hook(a.prep))
+    print(json.dumps({k: st[k] for k in ("read", "kept", "dropped", "conflicting_inputs", "thought_variants", "runs", "train", "val",
+                                         "corrections", "tools")}, ensure_ascii=False))
     print("→", a.out, "(train.jsonl / val.jsonl / stats.json) — git 제외 경로에 둘 것")
+    return 0
+
+
+def cmd_pairs(a: argparse.Namespace) -> int:
+    from btqa_play.dataset import build_pairs
+    from btqa_play.hooks import load_hook
+    print(json.dumps(build_pairs(a.inputs, a.out, keep_ungrounded=a.keep_ungrounded, prep=load_hook(a.prep)), ensure_ascii=False))
+    return 0
+
+
+def cmd_approve(a: argparse.Namespace) -> int:
+    for r in relay_approve(a.n, port=a.port):
+        res = r.get("result") or {}
+        print(r.get("error") or "%s %s → %s %s" % (res.get("tool"), json.dumps(res.get("input"), ensure_ascii=False)[:70],
+                                                    res.get("status") or res.get("error"), res.get("reason") or ""))
     return 0
 
 
@@ -234,7 +253,21 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--sources", nargs="+", default=["teacher"], help="쓸 기록 source (기본 teacher)")
     p.add_argument("--keep-ungrounded", action="store_true", help="입력에 근거 없는 샘플도 남긴다 (기본: 뺀다)")
+    p.add_argument("--correction-weight", type=int, default=1, help="교정(DAgger) 단계를 train 에 몇 번 넣을지 (예 3)")
+    p.add_argument("--prep", help="샘플 전처리 함수 '모듈:함수' (게임 쪽, 예 play_agent.distill_prep:prep_sample)")
     p.set_defaults(fn=cmd_dataset)
+
+    p = sub.add_parser("pairs", help="교정(DAgger) 기록 → DPO 선호 쌍 (chosen=교사, rejected=학생)")
+    p.add_argument("inputs", nargs="+")
+    p.add_argument("--out", required=True)
+    p.add_argument("--keep-ungrounded", action="store_true")
+    p.add_argument("--prep", help="쌍 전처리 함수 '모듈:함수' (게임 쪽)")
+    p.set_defaults(fn=cmd_pairs)
+
+    p = sub.add_parser("approve", help="교정 모드: 학생 제안을 정답으로 승인 N번")
+    p.add_argument("n", type=int, nargs="?", default=1)
+    p.add_argument("--port", type=int, default=DEFAULT_RELAY_PORT)
+    p.set_defaults(fn=cmd_approve)
 
     p = sub.add_parser("step", help="relay 에 도구 호출 1개 (tool=intro 처음 관찰·도구·규칙, note 메모만, view 지금 단계 입력)")
     p.add_argument("tool")

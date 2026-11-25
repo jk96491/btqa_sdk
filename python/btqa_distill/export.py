@@ -17,8 +17,9 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
-from typing import List, Optional, Union
+from typing import Dict, List, Optional, Union
 
 PathLike = Union[str, Path]
 QUANTS = ("Q4_K_M", "Q5_K_M", "Q8_0", "F16")
@@ -108,9 +109,42 @@ def cpu_variant_modelfile(base: str, num_ctx: int = 8192) -> str:
     return "FROM %s\nPARAMETER num_gpu 0\nPARAMETER num_ctx %d\nPARAMETER temperature 0\n" % (base, num_ctx)
 
 
+def gpu_variant_modelfile(base: str, num_gpu: int = 99) -> str:
+    """등록한 모델(CPU 전용 num_gpu 0)과 같은 가중치의 GPU 변형 — 비교·화면용 (뒤에 쓴 PARAMETER 가 덮는다).
+    주의: GPU·CPU 는 연산 순서·정밀도가 달라 탐욕 디코딩이라도 갈림길에서 다른 행동을 고를 수 있다 → 따로 평가할 것."""
+    return "FROM %s\nPARAMETER num_gpu %d\n" % (base, num_gpu)
+
+
+def variant_create(base: str, name: str, text: str) -> None:
+    with tempfile.TemporaryDirectory() as d:
+        mf = Path(d) / "Modelfile"
+        mf.write_text(text, encoding="utf-8")
+        ollama_create(name, mf)
+
+
+def export_all(base_model: str, adapter_dir: PathLike, out_dir: PathLike, llama_cpp: PathLike, name: str,
+               template_from: Optional[str] = None, quant: str = "Q4_K_M", gpu_name: Optional[str] = None,
+               num_ctx: int = 8192) -> Dict[str, str]:
+    """어댑터 → merge → GGUF → Ollama (CPU 전용 name, gpu_name 을 주면 GPU 변형도). 이미 있는 중간 산출물은 다시 만들지 않는다."""
+    out = Path(out_dir)
+    merged = out / "merged"
+    if not (merged / "model.safetensors").exists() and not list(merged.glob("*.safetensors")):
+        merge(base_model, adapter_dir, merged)
+    gguf = out / ("model.%s.gguf" % quant)
+    if not gguf.exists():
+        to_gguf(merged, gguf, llama_cpp, quant=quant)
+    mf = write_modelfile(gguf, gguf.with_suffix(".Modelfile"), template_from=template_from, cpu=True, num_ctx=num_ctx)
+    ollama_create(name, mf)
+    res = {"merged": str(merged), "gguf": str(gguf), "ollama": name}
+    if gpu_name:
+        variant_create(name, gpu_name, gpu_variant_modelfile(name))
+        res["ollama_gpu"] = gpu_name
+    return res
+
+
 def ollama_create(name: str, modelfile: PathLike) -> None:
     subprocess.run([ollama_exe(), "create", name, "-f", str(modelfile)], check=True)
 
 
-__all__ = ["merge", "to_gguf", "modelfile_text", "write_modelfile", "cpu_variant_modelfile", "ollama_template",
-           "ollama_create", "ollama_exe", "QUANTS"]
+__all__ = ["merge", "to_gguf", "modelfile_text", "write_modelfile", "cpu_variant_modelfile", "gpu_variant_modelfile",
+           "variant_create", "export_all", "ollama_template", "ollama_create", "ollama_exe", "QUANTS"]

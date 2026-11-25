@@ -12,6 +12,11 @@
 - CLI `python -m btqa_distill dpo --base --pairs --out [--beta --lr --epochs --grad-accum]`
 - `build_dataset(val_runs=...)` / `dataset --val-runs`: 검증 판을 고정 (판 id 끝부분 일치) — DAgger 교정이 검증으로 빠지지 않게
 - 수정: `PilotRelay` 서버가 빈 줄·JSON 아닌 요청에 죽지 않음 (오류 응답 후 계속)
+- **게임 고유 처리 훅** `btqa_play.hooks.load_hook("모듈:함수")` — 증류 전처리·RFT 보상·판 준비를 게임 쪽 함수 이름으로 넘긴다 (SDK 는 그 패키지를 import 하지 않음). 게임 쪽은 `btqa_distill`(torch) 을 import 할 필요가 없어진다
+- `build_dataset(correction_weight=N, prep=fn)` / `dataset --correction-weight N --prep 모듈:함수`: 교정 단계(학생 제안 ≠ 정답 또는 `edited`) 를 train 에 N 번, 샘플 전처리 (train·val). `is_correction`, 샘플 `meta.correction`, 통계 `corrections`. 행동 비교는 값이 null 인 인자를 무시
+- `build_pairs(prep=fn)` + CLI `python -m btqa_play pairs ... --out --prep`
+- DAgger 승인 `relay_approve(n)` / `python -m btqa_play approve [N]` — 학생 제안을 정답으로 (1~2개씩 권장)
+- `btqa_distill`: `rft` CLI (`--reward`·`--prepare` 훅), `gpu-variant` (등록한 CPU 전용 모델의 GPU 변형), `export` (merge → gguf → ollama 한 번에, `--gpu-name`), `export.export_all`·`gpu_variant_modelfile`·`variant_create`
 
 ## 0.4.0 — 2026-11-24
 

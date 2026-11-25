@@ -13,6 +13,9 @@
     - 중복: 같은 (system, user) → 같은 target 글은 하나만. 같은 입력·같은 행동에 생각 문장만 다르면 남기고 thought_variants 로,
       같은 입력에 다른 행동이면 남기고 conflicting_inputs 로 센다 (검토 대상)
 나누기: **판(run) 단위**로 val 을 뗀다 (같은 판의 이웃 단계가 train·val 에 섞이면 val 이 낙관적이 된다).
+
+교정(DAgger) 가중: correction_weight=N 이면 교정 단계(학생 제안이 교사 정답과 행동이 다르거나 `edited` 로 고친 단계)를 train 에 N 번 넣는다.
+전처리: prep = 샘플 → 샘플 함수 (게임 쪽, 예: 목표 thought 앞에 상황 읽기). SDK 는 내용을 모른다 — CLI 는 `--prep 모듈:함수` (hooks.load_hook).
 """
 from __future__ import annotations
 
@@ -20,7 +23,9 @@ import hashlib
 import json
 import random
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple, Union
+from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple, Union
+
+Prep = Callable[[Dict[str, Any]], Dict[str, Any]]
 
 from btqa_play.record import STEP_FORMAT, read_steps
 
@@ -53,16 +58,35 @@ def _reason_to_drop(rec: Dict[str, Any], sources: Sequence[str], keep_ungrounded
     return ""
 
 
+def _act(a: Optional[Dict[str, Any]]) -> Tuple[str, str]:
+    a = a or {}
+    inp = {k: v for k, v in (a.get("input") or {}).items() if v is not None}
+    return str(a.get("tool") or ""), json.dumps(inp, sort_keys=True, ensure_ascii=False)
+
+
+def is_correction(rec: Dict[str, Any]) -> bool:
+    """교정 단계: 학생 제안이 있고 교사 정답과 행동이 다르거나, 기록 뒤 정답을 고친 단계(`edited`)."""
+    st = rec.get("student")
+    if not st:
+        return False
+    return bool(rec.get("edited")) or (bool(st.get("tool")) and _act(st) != _act(rec.get("target")))
+
+
 def to_sample(rec: Dict[str, Any]) -> Dict[str, Any]:
     msgs = [dict(m) for m in rec["messages"]] + [{"role": "assistant", "content": rec["target_text"]}]
     return {"format": DATASET_FORMAT, "messages": msgs,
-            "meta": {"run": rec.get("run"), "step": rec.get("step"), "source": rec.get("source"), "tool": rec["target"]["tool"]}}
+            "meta": {"run": rec.get("run"), "step": rec.get("step"), "source": rec.get("source"), "tool": rec["target"]["tool"],
+                     "correction": is_correction(rec)}}
 
 
 def build_dataset(inputs: Sequence[Union[str, Path]], out_dir: Union[str, Path], val_ratio: float = 0.1, seed: int = 0,
                   sources: Sequence[str] = ("teacher",), keep_ungrounded: bool = False,
-                  val_runs: Optional[Sequence[str]] = None) -> Dict[str, Any]:
-    """val_runs: 검증으로 뺄 판(run) 이름 — 주면 val_ratio 무작위 선택 대신 이것 (예: 교정 판은 학습에 두고 교사 판으로 검증)."""
+                  val_runs: Optional[Sequence[str]] = None, correction_weight: int = 1,
+                  prep: Optional[Prep] = None) -> Dict[str, Any]:
+    """val_runs: 검증으로 뺄 판(run) 이름 — 주면 val_ratio 무작위 선택 대신 이것 (예: 교정 판은 학습에 두고 교사 판으로 검증).
+    correction_weight: 교정 단계를 train 에 몇 번 넣을지 (val 은 항상 1번). prep: 샘플 전처리 (train·val 모두)."""
+    if correction_weight < 1:
+        raise ValueError("correction_weight 는 1 이상")
     recs: List[Dict[str, Any]] = []
     for p in inputs:
         recs += read_steps(p)
@@ -99,8 +123,21 @@ def build_dataset(inputs: Sequence[Union[str, Path]], out_dir: Union[str, Path],
     else:
         n_val = max(1, int(round(len(runs) * val_ratio))) if len(runs) > 1 and val_ratio > 0 else 0
         val_runs = set(runs[:n_val])
-    train = [to_sample(r) for r in kept if str(r.get("run")) not in val_runs]
-    val = [to_sample(r) for r in kept if str(r.get("run")) in val_runs]
+    def sample(r: Dict[str, Any]) -> Dict[str, Any]:
+        s = to_sample(r)
+        return prep(s) if prep else s
+
+    train, val, n_corr = [], [], 0
+    for r in kept:
+        if str(r.get("run")) in val_runs:
+            val.append(sample(r))
+            continue
+        s = sample(r)
+        if s["meta"].get("correction"):
+            n_corr += 1
+            train += [s] * correction_weight
+        else:
+            train.append(s)
 
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
@@ -118,7 +155,8 @@ def build_dataset(inputs: Sequence[Union[str, Path]], out_dir: Union[str, Path],
         tools[s["meta"]["tool"]] = tools.get(s["meta"]["tool"], 0) + 1
     stats = {"format": DATASET_FORMAT, "inputs": [str(p) for p in inputs], "read": len(recs), "kept": len(kept),
              "dropped": dropped, "conflicting_inputs": conflicts, "thought_variants": thought_variants, "runs": len(runs), "val_runs": sorted(val_runs),
-             "train": len(train), "val": len(val), "tools": tools,
+             "train": len(train), "val": len(val), "corrections": n_corr, "correction_weight": correction_weight,
+             "prep": getattr(prep, "__module__", None) and "%s:%s" % (prep.__module__, prep.__name__), "tools": tools,
              "mean_chars": {"user": _mean(train + val, 1), "assistant": _mean(train + val, 2)},
              "distinct_systems": len({s["messages"][0]["content"] for s in train + val})}
     (out / "stats.json").write_text(json.dumps(stats, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -128,11 +166,13 @@ def build_dataset(inputs: Sequence[Union[str, Path]], out_dir: Union[str, Path],
 PAIR_FORMAT = "btqa-play-pref/1"
 
 
-def build_pairs(inputs: Sequence[Union[str, Path]], out_path: Union[str, Path], keep_ungrounded: bool = False) -> Dict[str, Any]:
+def build_pairs(inputs: Sequence[Union[str, Path]], out_path: Union[str, Path], keep_ungrounded: bool = False,
+                prep: Optional[Prep] = None) -> Dict[str, Any]:
     """교정(DAgger) 기록 → 선호 쌍 (DPO). 한 줄 = {"prompt": [system, user], "chosen": 교사 정답 글, "rejected": 학생 제안 글}.
 
     학생 제안(rec.student)이 있고 교사 정답과 **행동(tool·input)이 다른** 단계만. 학생 출력이 형식 오류면 rejected 로 쓰지 않는다
     (형식은 JSON 강제가 맡는다). grounding 표시된 교사 정답은 기본으로 뺀다.
+    prep: 쌍 → 쌍 (게임 쪽). SFT 와 같은 thought 형식으로 chosen·rejected 를 맞출 때 — 형식이 다르면 DPO 가 행동이 아니라 형식 차이를 배운다.
     """
     from btqa_play.actions import action_text
     recs: List[Dict[str, Any]] = []
@@ -151,12 +191,13 @@ def build_pairs(inputs: Sequence[Union[str, Path]], out_path: Union[str, Path], 
             skipped["student_error"] += 1
             continue
         t = r["target"]
-        if (st["tool"], json.dumps(st.get("input") or {}, sort_keys=True)) == (t["tool"], json.dumps(t.get("input") or {}, sort_keys=True)):
+        if _act(st) == _act(t):
             skipped["same_action"] += 1
             continue
-        pairs.append({"format": PAIR_FORMAT, "prompt": [dict(m) for m in r["messages"]], "chosen": r["target_text"],
-                      "rejected": action_text(st.get("thought") or "", st["tool"], st.get("input") or {}),
-                      "meta": {"run": r.get("run"), "step": r.get("step"), "chosen_tool": t["tool"], "rejected_tool": st["tool"]}})
+        pair = {"format": PAIR_FORMAT, "prompt": [dict(m) for m in r["messages"]], "chosen": r["target_text"],
+                "rejected": action_text(st.get("thought") or "", st["tool"], st.get("input") or {}),
+                "meta": {"run": r.get("run"), "step": r.get("step"), "chosen_tool": t["tool"], "rejected_tool": st["tool"]}}
+        pairs.append(prep(pair) if prep else pair)
     out = Path(out_path)
     out.parent.mkdir(parents=True, exist_ok=True)
     with out.open("w", encoding="utf-8") as f:
@@ -175,4 +216,5 @@ def split_prompt(sample: Dict[str, Any]) -> Tuple[List[Dict[str, str]], str]:
     return [dict(x) for x in m[:-1]], m[-1]["content"]
 
 
-__all__ = ["DATASET_FORMAT", "PAIR_FORMAT", "build_dataset", "build_pairs", "to_sample", "read_samples", "split_prompt"]
+__all__ = ["DATASET_FORMAT", "PAIR_FORMAT", "build_dataset", "build_pairs", "is_correction", "to_sample", "read_samples",
+           "split_prompt"]
