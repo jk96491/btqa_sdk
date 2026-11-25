@@ -138,7 +138,7 @@ def cmd_batch(a: argparse.Namespace) -> int:
 def cmd_dataset(a: argparse.Namespace) -> int:
     from btqa_play.dataset import build_dataset
     st = build_dataset(a.inputs, a.out, val_ratio=a.val_ratio, seed=a.seed, sources=tuple(a.sources),
-                       keep_ungrounded=a.keep_ungrounded)
+                       keep_ungrounded=a.keep_ungrounded, val_runs=a.val_runs)
     print(json.dumps({k: st[k] for k in ("read", "kept", "dropped", "conflicting_inputs", "thought_variants", "runs", "train", "val", "tools")},
                      ensure_ascii=False))
     print("→", a.out, "(train.jsonl / val.jsonl / stats.json) — git 제외 경로에 둘 것")
@@ -230,6 +230,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("inputs", nargs="+")
     p.add_argument("--out", required=True)
     p.add_argument("--val-ratio", type=float, default=0.1)
+    p.add_argument("--val-runs", nargs="+", help="검증으로 뺄 판 이름(끝부분 일치, 예 -s5) — 주면 --val-ratio 무작위 대신")
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--sources", nargs="+", default=["teacher"], help="쓸 기록 source (기본 teacher)")
     p.add_argument("--keep-ungrounded", action="store_true", help="입력에 근거 없는 샘플도 남긴다 (기본: 뺀다)")

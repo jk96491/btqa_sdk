@@ -6,6 +6,7 @@
     gguf    --merged <dir> --out model.gguf --llama-cpp <llama.cpp 폴더> [--quant Q4_K_M]
     ollama  --gguf model.gguf --name qa-qwen1.5b-lora --template-from qwen2.5:1.5b [--gpu]   Ollama 등록 (기본 CPU 전용)
     cpu-variant --base qwen2.5:1.5b --name qwen2.5-1.5b-cpu                  받은 모델의 CPU 전용 변형 (기준선용)
+    dpo     --base <SFT merged> --pairs pairs.jsonl --out <dir> [--beta 0.1 --lr 2e-5 --epochs 2]   선호 쌍 DPO → <out>/adapter
 
 산출물은 git 제외 경로(distill_out/ 등)에 — 모델 파일은 절대 커밋하지 않는다.
 """
@@ -96,6 +97,12 @@ def cmd_cpu_variant(a: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_dpo(a: argparse.Namespace) -> int:
+    from btqa_distill.dpo import train_dpo
+    print(train_dpo(a.base, a.pairs, a.out, beta=a.beta, lr=a.lr, epochs=a.epochs, grad_accum=a.grad_accum))
+    return 0
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     _utf8()
     ap = argparse.ArgumentParser(prog="python -m btqa_distill", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -133,6 +140,15 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--name", required=True)
     p.add_argument("--num-ctx", type=int, default=8192)
     p.set_defaults(fn=cmd_cpu_variant)
+    p = sub.add_parser("dpo")
+    p.add_argument("--base", required=True, help="SFT 를 합친 모델 폴더 (기준 정책 = 이것)")
+    p.add_argument("--pairs", required=True)
+    p.add_argument("--out", required=True)
+    p.add_argument("--beta", type=float, default=0.1)
+    p.add_argument("--lr", type=float, default=2e-5)
+    p.add_argument("--epochs", type=int, default=2)
+    p.add_argument("--grad-accum", type=int, default=8)
+    p.set_defaults(fn=cmd_dpo)
     a = ap.parse_args(argv)
     return a.fn(a)
 

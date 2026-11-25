@@ -139,7 +139,15 @@ class PilotRelay:
                 while tools.finished is None:
                     conn, _ = srv.accept()
                     with conn:
-                        req = json.loads(conn.makefile("rb").readline().decode("utf-8"))
+                        line = conn.makefile("rb").readline().decode("utf-8", "replace").strip()
+                        try:
+                            req = json.loads(line)
+                        except ValueError:
+                            req = None
+                        if not isinstance(req, dict):   # 빈 줄·포트 확인 등 잘못된 요청은 중계기를 죽이지 않는다
+                            if line:
+                                conn.sendall((to_text({"error": "bad request: JSON 객체 한 줄"}) + "\n").encode("utf-8"))
+                            continue
                         out = self._handle(tools, req, intro)
                         conn.sendall((to_text(out) + "\n").encode("utf-8"))
             log = c.get_log()

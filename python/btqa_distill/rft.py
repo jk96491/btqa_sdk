@@ -108,14 +108,14 @@ def train_rft(base: str, game: str, scratch: str, seeds: Sequence[int], reward_f
         with torch.no_grad(), torch.autocast(device_type="cuda", dtype=dtype, enabled=device.startswith("cuda")):
             g = model.generate(x, attention_mask=torch.ones_like(x), max_new_tokens=max_new_tokens, do_sample=not greedy,
                                temperature=temperature if not greedy else None, top_p=0.95 if not greedy else None,
-                               pad_token_id=tok.pad_token_id or tok.eos_token_id)
+                               pad_token_id=tok.pad_token_id or tok.eos_token_id, use_cache=True)   # 체크포인팅이 캐시를 끄지 않게
         model.train()
         return tok.decode(g[0, len(ids):], skip_special_tokens=True)
 
     def logp(ids: List[int], answer_ids: List[int]) -> Any:
         x = torch.tensor([ids + answer_ids], device=device)
         with torch.autocast(device_type="cuda", dtype=dtype, enabled=device.startswith("cuda")):
-            lg = model(input_ids=x).logits[:, len(ids) - 1:-1, :].float()
+            lg = model(input_ids=x, logits_to_keep=len(answer_ids) + 1).logits[:, :-1, :].float()   # 답 구간 logits 만
         return torch.log_softmax(lg, -1).gather(-1, x[:, len(ids):].unsqueeze(-1)).squeeze(-1).sum()
 
     log: Dict[str, Any] = {"base": base, "seeds": list(seeds), "k": k, "lr": lr, "kl": kl_coef, "episodes": []}

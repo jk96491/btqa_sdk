@@ -30,10 +30,10 @@ def _encode_pair(tok: Any, prompt: List[Dict[str, str]], answer: str) -> Tuple[L
 def _seq_logp(model: Any, ids: List[int], n_prompt: int, torch: Any, device: str, dtype: Any) -> Any:
     x = torch.tensor([ids], device=device)
     with torch.autocast(device_type="cuda" if device.startswith("cuda") else "cpu", dtype=dtype, enabled=device.startswith("cuda")):
-        logits = model(input_ids=x).logits[:, :-1, :].float()
-    tgt = x[:, 1:]
+        logits = model(input_ids=x, logits_to_keep=len(ids) - n_prompt + 1).logits[:, :-1, :].float()   # 답 구간 logits 만
+    tgt = x[:, n_prompt:]
     lp = torch.log_softmax(logits, dim=-1).gather(-1, tgt.unsqueeze(-1)).squeeze(-1)
-    return lp[:, n_prompt - 1:].sum()
+    return lp.sum()
 
 
 def train_dpo(base: str, pairs: Union[str, Path], out_dir: Union[str, Path], beta: float = 0.1, lr: float = 2e-5,

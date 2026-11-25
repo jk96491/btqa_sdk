@@ -8,6 +8,10 @@
 - `dataset.build_pairs` → 선호 쌍 `btqa-play-pref/1` (교사가 학생과 다르게 고른 단계: chosen=교사, rejected=학생). `build_dataset` 통계에 thought 표현 차이(`thought_variants`)를 충돌과 따로 셈
 - `btqa_distill.dpo.train_dpo` (참조 = 어댑터 끈 같은 모델), `btqa_distill.rft.train_rft` (GRPO, 게임 = 채점기, scratch 게임에서 seed+prefix 재생으로 분기, reward_fn 은 게임 쪽이 준다)
 - transformers 5 대응: `apply_chat_template` BatchEncoding (`train._ids`), `config.load_causal_lm` (`dtype`/`torch_dtype`)
+- `train`/`dpo`/`rft`: `logits_to_keep` 로 답 구간만 logits 계산 (손실 동일, 12GB GPU 에서 VRAM 넘침 → 시스템 RAM 공유로 5배 느려지던 문제 해결). RFT 생성 `use_cache=True`
+- CLI `python -m btqa_distill dpo --base --pairs --out [--beta --lr --epochs --grad-accum]`
+- `build_dataset(val_runs=...)` / `dataset --val-runs`: 검증 판을 고정 (판 id 끝부분 일치) — DAgger 교정이 검증으로 빠지지 않게
+- 수정: `PilotRelay` 서버가 빈 줄·JSON 아닌 요청에 죽지 않음 (오류 응답 후 계속)
 
 ## 0.4.0 — 2026-11-24
 

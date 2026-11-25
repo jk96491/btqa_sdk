@@ -51,6 +51,23 @@ def _batches(items: Sequence[Tuple[List[int], List[int]]], size: int, rng: rando
         yield [items[j] for j in idx[i:i + size]]
 
 
+def answer_loss(model: Any, ids: Any, att: Any, lab: Any, torch: Any, device: str, dtype: Any, use_amp: bool) -> Any:
+    """답(assistant) 토큰의 교차 엔트로피. logits 는 답 구간만 만든다 (`logits_to_keep`).
+
+    입력 수천 토큰 × 어휘 15만의 전체 logits(fp32 1.8GB+, 기울기 포함 수 GB)를 만들지 않는다 — 3060 12GB 에서
+    전체 logits 는 GPU 메모리를 넘겨 시스템 RAM 으로 넘치고 학습이 수 배 느려졌다 (2026-11-25 r4).
+    값은 `model(labels=lab).loss` 와 같다 (라벨 있는 토큰 평균)."""
+    T = ids.shape[1]
+    labeled = (lab != -100).any(0).nonzero()
+    p0 = int(labeled[0]) if len(labeled) else T - 1          # 처음 라벨 위치 (배치 전체)
+    k = T - p0 + 1                                           # 위치 p0-1 ~ T-1 의 logits (p0-1 이 p0 를 예측)
+    with torch.autocast(device_type="cuda" if device.startswith("cuda") else "cpu", dtype=dtype, enabled=use_amp):
+        logits = model(input_ids=ids, attention_mask=att, logits_to_keep=k).logits
+    pred = logits[:, :-1, :].float()
+    tgt = lab[:, T - k + 1:]
+    return torch.nn.functional.cross_entropy(pred.reshape(-1, pred.shape[-1]), tgt.reshape(-1), ignore_index=-100)
+
+
 def _collate(batch, pad_id: int, torch: Any, device: str):
     n = max(len(x) for x, _ in batch)
     ids = torch.full((len(batch), n), pad_id, dtype=torch.long)
@@ -118,8 +135,7 @@ def train_lora(cfg: TrainConfig, train_path: Union[str, Path], val_path: Optiona
 
     def run_loss(batch):
         ids, att, lab = _collate(batch, pad_id, torch, device)
-        with torch.autocast(device_type="cuda" if device.startswith("cuda") else "cpu", dtype=dtype, enabled=use_amp):
-            return model(input_ids=ids, attention_mask=att, labels=lab).loss
+        return answer_loss(model, ids, att, lab, torch, device, dtype, use_amp)
 
     log: Dict[str, Any] = {"config": cfg.to_dict(), "train_samples": len(train), "val_samples": len(val),
                            "dropped_too_long": {"train": train_dropped, "val": val_dropped}, "steps": [], "epochs": []}

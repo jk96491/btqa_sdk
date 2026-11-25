@@ -20,7 +20,7 @@ import hashlib
 import json
 import random
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Sequence, Tuple, Union
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple, Union
 
 from btqa_play.record import STEP_FORMAT, read_steps
 
@@ -60,7 +60,9 @@ def to_sample(rec: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def build_dataset(inputs: Sequence[Union[str, Path]], out_dir: Union[str, Path], val_ratio: float = 0.1, seed: int = 0,
-                  sources: Sequence[str] = ("teacher",), keep_ungrounded: bool = False) -> Dict[str, Any]:
+                  sources: Sequence[str] = ("teacher",), keep_ungrounded: bool = False,
+                  val_runs: Optional[Sequence[str]] = None) -> Dict[str, Any]:
+    """val_runs: 검증으로 뺄 판(run) 이름 — 주면 val_ratio 무작위 선택 대신 이것 (예: 교정 판은 학습에 두고 교사 판으로 검증)."""
     recs: List[Dict[str, Any]] = []
     for p in inputs:
         recs += read_steps(p)
@@ -92,8 +94,11 @@ def build_dataset(inputs: Sequence[Union[str, Path]], out_dir: Union[str, Path],
     runs = sorted({str(r.get("run")) for r in kept})
     rng = random.Random(seed)
     rng.shuffle(runs)
-    n_val = max(1, int(round(len(runs) * val_ratio))) if len(runs) > 1 and val_ratio > 0 else 0
-    val_runs = set(runs[:n_val])
+    if val_runs is not None:
+        val_runs = {r for r in runs if any(r == v or r.endswith(v) for v in val_runs)}
+    else:
+        n_val = max(1, int(round(len(runs) * val_ratio))) if len(runs) > 1 and val_ratio > 0 else 0
+        val_runs = set(runs[:n_val])
     train = [to_sample(r) for r in kept if str(r.get("run")) not in val_runs]
     val = [to_sample(r) for r in kept if str(r.get("run")) in val_runs]
 
