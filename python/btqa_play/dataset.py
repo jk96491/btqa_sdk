@@ -9,9 +9,13 @@
 거르기 (기본):
     - source 가 sources 에 없는 줄 (기본 teacher 만 — model 기록은 평가용, 교정 데이터는 source=teacher 로 기록)
     - grounding 이 비어 있지 않은 줄 (학생 입력에 근거가 없는 판단 — 배울 수 없다)
+    - 해소되지 않은 needs_review (실행해 보니 실패한 정답·진척 없는 반복, review.py) — reviewed/edited 로 해소하면 쓴다
+    - uncertain (교사가 확신하지 못한 라벨) 은 기본으로 남기고 센다. drop_uncertain=True 면 뺀다
     - 출력 형식 오류·모르는 도구 (target.tool 이 비었거나 result.error 가 형식 오류)
     - 중복: 같은 (system, user) → 같은 target 글은 하나만. 같은 입력·같은 행동에 생각 문장만 다르면 남기고 thought_variants 로,
       같은 입력에 다른 행동이면 남기고 conflicting_inputs 로 센다 (검토 대상)
+    - 상황 충돌: situation_key = user 글 → "같은 상황" 키 (게임 쪽 함수, 예: 지역·퀘스트 목표·창). 입력 글자는 달라도 같은 상황에
+      다른 도구를 고른 줄을 situation_conflicts 로 센다 (예: 같은 장면에서 한 번은 talk, 한 번은 인벤토리 열기 — 학생이 흔들린다)
 나누기: **판(run) 단위**로 val 을 뗀다 (같은 판의 이웃 단계가 train·val 에 섞이면 val 이 낙관적이 된다).
 
 교정(DAgger) 가중: correction_weight=N 이면 교정 단계(학생 제안이 교사 정답과 행동이 다르거나 `edited` 로 고친 단계)를 train 에 N 번 넣는다.
@@ -27,7 +31,7 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tupl
 
 Prep = Callable[[Dict[str, Any]], Dict[str, Any]]
 
-from btqa_play.record import STEP_FORMAT, read_steps
+from btqa_play.record import STEP_FORMAT, read_steps, with_history
 
 DATASET_FORMAT = "btqa-play-sft/1"
 
@@ -40,7 +44,8 @@ def _key(*parts: str) -> str:
     return h.hexdigest()
 
 
-def _reason_to_drop(rec: Dict[str, Any], sources: Sequence[str], keep_ungrounded: bool) -> str:
+def _reason_to_drop(rec: Dict[str, Any], sources: Sequence[str], keep_ungrounded: bool,
+                    keep_unreviewed: bool = False, drop_uncertain: bool = False) -> str:
     if rec.get("format") != STEP_FORMAT:
         return "format"
     if rec.get("source") not in sources:
@@ -53,6 +58,11 @@ def _reason_to_drop(rec: Dict[str, Any], sources: Sequence[str], keep_ungrounded
         return "invalid_output"
     if rec.get("grounding") and not keep_ungrounded:
         return "ungrounded"
+    resolved = bool(rec.get("reviewed") or rec.get("edited"))
+    if rec.get("needs_review") and not resolved and not keep_unreviewed:
+        return "needs_review"
+    if rec.get("uncertain") and not resolved and drop_uncertain:
+        return "uncertain"
     if not rec.get("target_text") or len(rec.get("messages") or []) != 2:
         return "incomplete"
     return ""
@@ -82,21 +92,27 @@ def to_sample(rec: Dict[str, Any]) -> Dict[str, Any]:
 def build_dataset(inputs: Sequence[Union[str, Path]], out_dir: Union[str, Path], val_ratio: float = 0.1, seed: int = 0,
                   sources: Sequence[str] = ("teacher",), keep_ungrounded: bool = False,
                   val_runs: Optional[Sequence[str]] = None, correction_weight: int = 1,
-                  prep: Optional[Prep] = None) -> Dict[str, Any]:
+                  prep: Optional[Prep] = None, situation_key: Optional[Callable[[str], str]] = None,
+                  keep_unreviewed: bool = False, drop_uncertain: bool = False,
+                  history: Optional[int] = None) -> Dict[str, Any]:
     """val_runs: 검증으로 뺄 판(run) 이름 — 주면 val_ratio 무작위 선택 대신 이것 (예: 교정 판은 학습에 두고 교사 판으로 검증).
-    correction_weight: 교정 단계를 train 에 몇 번 넣을지 (val 은 항상 1번). prep: 샘플 전처리 (train·val 모두)."""
+    correction_weight: 교정 단계를 train 에 몇 번 넣을지 (val 은 항상 1번). prep: 샘플 전처리 (train·val 모두).
+    situation_key: user 글 → 상황 키 (게임 쪽). 같은 상황에 다른 도구 = situation_conflicts (stats 에 예시).
+    history: None = 기록의 user 글 그대로, K = 단계 입력을 history=K 형식으로 다시 만든다 (record.with_history — 실행 쪽 K 와 같게)."""
     if correction_weight < 1:
         raise ValueError("correction_weight 는 1 이상")
     recs: List[Dict[str, Any]] = []
     for p in inputs:
         recs += read_steps(p)
+    if history is not None:
+        recs = with_history(recs, history)
     dropped: Dict[str, int] = {}
     seen_text: Dict[str, set] = {}     # 입력 → 본 목표 글 (thought 포함) — 완전 중복 판정
     seen_act: Dict[str, set] = {}      # 입력 → 본 행동 (tool+input) — 진짜 충돌 판정
     conflicts = thought_variants = 0
     kept: List[Dict[str, Any]] = []
     for r in recs:
-        why = _reason_to_drop(r, sources, keep_ungrounded)
+        why = _reason_to_drop(r, sources, keep_ungrounded, keep_unreviewed, drop_uncertain)
         if why:
             dropped[why] = dropped.get(why, 0) + 1
             continue
@@ -114,6 +130,14 @@ def build_dataset(inputs: Sequence[Union[str, Path]], out_dir: Union[str, Path],
         seen_text.setdefault(k_in, set()).add(k_text)
         seen_act.setdefault(k_in, set()).add(k_act)
         kept.append(r)
+
+    situ: Dict[str, Dict[str, List[str]]] = {}   # 상황 키 → 도구 → [run#step]
+    if situation_key is not None:
+        for r in kept:
+            k = str(situation_key(r["messages"][1]["content"]))
+            situ.setdefault(k, {}).setdefault(r["target"]["tool"], []).append("%s#%s" % (r.get("run"), r.get("step")))
+    situation_conflicts = [{"situation": k, "tools": v} for k, v in situ.items() if len(v) > 1]
+    uncertain = sum(1 for r in kept if r.get("uncertain") and not (r.get("reviewed") or r.get("edited")))
 
     runs = sorted({str(r.get("run")) for r in kept})
     rng = random.Random(seed)
@@ -154,11 +178,13 @@ def build_dataset(inputs: Sequence[Union[str, Path]], out_dir: Union[str, Path],
     for s in train + val:
         tools[s["meta"]["tool"]] = tools.get(s["meta"]["tool"], 0) + 1
     stats = {"format": DATASET_FORMAT, "inputs": [str(p) for p in inputs], "read": len(recs), "kept": len(kept),
-             "dropped": dropped, "conflicting_inputs": conflicts, "thought_variants": thought_variants, "runs": len(runs), "val_runs": sorted(val_runs),
+             "dropped": dropped, "conflicting_inputs": conflicts, "thought_variants": thought_variants,
+             "situation_conflicts": len(situation_conflicts), "situation_conflict_examples": situation_conflicts[:20],
+             "uncertain_kept": uncertain, "runs": len(runs), "val_runs": sorted(val_runs),
              "train": len(train), "val": len(val), "corrections": n_corr, "correction_weight": correction_weight,
              "prep": getattr(prep, "__module__", None) and "%s:%s" % (prep.__module__, prep.__name__), "tools": tools,
              "mean_chars": {"user": _mean(train + val, 1), "assistant": _mean(train + val, 2)},
-             "distinct_systems": len({s["messages"][0]["content"] for s in train + val})}
+             "distinct_systems": len({s["messages"][0]["content"] for s in train + val}), "history": history}
     (out / "stats.json").write_text(json.dumps(stats, ensure_ascii=False, indent=2), encoding="utf-8")
     return stats
 
@@ -167,8 +193,11 @@ PAIR_FORMAT = "btqa-play-pref/1"
 
 
 def build_pairs(inputs: Sequence[Union[str, Path]], out_path: Union[str, Path], keep_ungrounded: bool = False,
-                prep: Optional[Prep] = None) -> Dict[str, Any]:
+                prep: Optional[Prep] = None, history: Optional[int] = None) -> Dict[str, Any]:
     """교정(DAgger) 기록 → 선호 쌍 (DPO). 한 줄 = {"prompt": [system, user], "chosen": 교사 정답 글, "rejected": 학생 제안 글}.
+
+    **off-policy 쌍** — chosen 이 교사 글이라 학생 분포 밖이다 (AI_QA r9: 쌍 18개로 후퇴). SFT 뒤 DPO 의 기본은
+    btqa_distill.onpolicy (학생 자신의 샘플을 게임으로 채점한 쌍)이고, 이 함수는 교사 정답을 섞고 싶을 때 쓴다.
 
     학생 제안(rec.student)이 있고 교사 정답과 **행동(tool·input)이 다른** 단계만. 학생 출력이 형식 오류면 rejected 로 쓰지 않는다
     (형식은 JSON 강제가 맡는다). grounding 표시된 교사 정답은 기본으로 뺀다.
@@ -178,14 +207,18 @@ def build_pairs(inputs: Sequence[Union[str, Path]], out_path: Union[str, Path], 
     recs: List[Dict[str, Any]] = []
     for p in inputs:
         recs += read_steps(p)
-    pairs, skipped = [], {"no_student": 0, "same_action": 0, "student_error": 0, "ungrounded": 0, "invalid": 0}
+    if history is not None:
+        recs = with_history(recs, history)
+    pairs, skipped = [], {"no_student": 0, "same_action": 0, "student_error": 0, "ungrounded": 0, "needs_review": 0, "invalid": 0}
     for r in recs:
         st = r.get("student")
         if not st:
             skipped["no_student"] += 1
             continue
-        if _reason_to_drop(r, ("teacher",), keep_ungrounded):
-            skipped["ungrounded" if r.get("grounding") else "invalid"] += 1
+        why = _reason_to_drop(r, ("teacher",), keep_ungrounded)
+        if why:
+            key = why if why in skipped else "invalid"
+            skipped[key] = skipped.get(key, 0) + 1
             continue
         if not st.get("tool"):
             skipped["student_error"] += 1

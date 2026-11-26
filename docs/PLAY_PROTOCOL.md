@@ -129,6 +129,8 @@
 | `pilot_guide` | (선택, 2026-11-24) LLM 플레이어에게 줄 게임 안내 — 4.2.1 |
 | `progress_keys` | (선택, 2026-11-24) LLM 진척 판단에 볼 관찰 경로 — 4.2.1 |
 | `observation_drop` | (선택, 2026-11-24) LLM 에게 보이기 전에 뺄 관찰 경로 — 4.2.1 |
+| `reset_options` | (선택, 2026-11-26) `reset.options` 로 고를 수 있는 시작 조건 선언 — 4.4.1 |
+| `capabilities.snapshot` | (선택, 2026-11-26) `snapshot`/`restore` 지원 — 4.11 |
 
 #### 4.2.1 LLM 도구·안내 선언 (선택 필드)
 
@@ -210,9 +212,30 @@
 ```
 - `reset` = **항상 새 게임** (튜토리얼 첫 장면, 퀘스트·인벤토리·골드 초기 상태). 중간 지점에서 시작하는 옵션은 없다.
   - 게임 안의 체크포인트(`cp_forest`)는 전투 패배 시 **부활 위치**일 뿐, 시작 지점으로 고를 수 없다.
-- 인자는 **`seed`·`class` 뿐**. 다른 키 → `error(bad_request)`. `seed` 생략 = `-qaPlaySeed`(기본 1), `class` 생략 = `warrior`. 모르는 class → `unknown_class`.
-- `seed`: 세계 난수와 조우 seed 의 근원 (4.7 조우 seed).
+- 인자는 **`seed`·`class`** (+ 게임이 `reset_options` 를 선언했으면 `options`, 4.4.1). 다른 키 → `error(bad_request)`. `seed` 생략 = `-qaPlaySeed`(기본 1), `class` 생략 = `warrior`. 모르는 class → `unknown_class`.
+- `seed`: 세계 난수와 조우 seed 의 근원 (4.7 조우 seed). **seed 가 바꾸는 것(배치·수량·순서 등)은 게임이 정하고 문서에 적는다** — 평가에서 seed N개가 서로 다른 판이어야 표본 N개다 (4.4.1 참고).
 - 응답은 첫 `observation` (`events` 에 `new_game`).
+- (2026-11-26) `options` — 게임이 `reset_options` 를 선언했을 때만 (4.4.1). 선언하지 않은 게임에 보내면 `bad_request` (위 규칙 그대로).
+
+#### 4.4.1 `reset.options` — 선언한 시작 조건 (선택, 2026-11-26)
+
+평가·학습이 **안 본 시작 조건**(일반화)과 **흔들린 조건**(강건성)을 고를 수 있게, 게임이 고를 수 있는 시작 조건을 선언한다.
+SDK 는 이름·범위만 확인하고 뜻은 모른다 (밸런스 프로토콜 1.4 `initial_state` 와 같은 방식).
+
+```json
+"reset_options": [
+  {"name": "start_gold", "type": "int", "min": 0, "max": 200, "default": 20, "description": "시작 골드"},
+  {"name": "layout",     "type": "enum", "values": ["a", "b", "c"], "default": "a", "description": "채집물 배치 변형"}
+]
+{"type": "reset", "seed": 101, "class": "archer", "options": {"start_gold": 0, "layout": "c"}}
+```
+| 규칙 | |
+|---|---|
+| 형식 | `name`(필수, 영문 소문자·`_`), `type` = `int`·`number`·`bool`·`enum`, `min`·`max`(수), `values`(enum), `default`, `description` |
+| 검사 | 모르는 이름·범위 밖·형식 오류 → `error(bad_request)` (reset 전체 무효, 이전 상태 유지). 빠진 키 = `default` |
+| 결정성 | 같은 `seed` + 같은 `options` + 같은 행동열 → 같은 로그 (4.8). `play_log` 의 `reset` 항목에 `options` 를 남긴다 |
+| 관찰 | 옵션 값 자체를 관찰에 몰래 넣지 않는다 — 플레이어가 지각할 수 있는 결과(골드 표시, 채집물 위치)만 보인다 (1장) |
+| 클라이언트 | SDK `PlayClient.reset(options=...)` 는 선언하지 않은 키를 보내기 전에 거부한다. 평가 스위트(`btqa-eval-suite/1`)의 조건 `options` 는 게임이 선언하지 않았으면 건너뛰고 이유를 남긴다 |
 
 ### 4.5 `observe` → `observation`
 
@@ -357,6 +380,22 @@
 - `play_log` 에 `[t,"pilot_note",{"kind","text"}]` 로 남는다. 재현 비교(같은 seed + 같은 행동열 → 같은 로그)에서는 `pilot_note` 항목을 뺀다.
 - 헤드리스(`-batchmode`)에서는 그리지 않고 로그만 남긴다.
 
+### 4.11 `snapshot` / `restore` — 같은 상태에서 다른 행동 시험 (선택, 2026-11-26)
+
+SFT 뒤 학습(RFT 채점, on-policy 선호 쌍)은 **같은 상태에서 후보 행동 여러 개**를 실행해 본다. 선언이 없으면 클라이언트는
+후보마다 `reset(seed, class, options)` + 행동열 재생으로 같은 상태를 만든다 (4.4·4.8 결정성) — 맞지만 느리다 (행동 37개 재생 2.2s).
+게임이 상태 저장을 지원하면 `play_description.capabilities.snapshot: true` 를 선언한다.
+
+```json
+{"type": "snapshot"}                       →  {"type": "snapshot_ok", "id": "snap_3"}
+{"type": "restore", "id": "snap_3"}        →  observation (그 시점 관찰, events 는 비움)
+```
+- 저장 범위 = 결정성에 들어가는 **모든 것**: 세계·퀘스트·인벤토리·골드·창(modal)·난수 상태·조우 순번 k(4.7)·로드아웃. `restore` 뒤 같은 행동 → 저장 직후 그 행동을 한 것과 **같은 결과·같은 로그 꼬리**.
+- id 는 연결 안에서만 유효 (연결이 끊기면 사라진다). 개수 상한은 게임이 정하고 넘으면 오래된 것부터 지운다 (지운 id → `error(bad_request)`).
+- `reset` 전 → `not_reset`, 전투 중 → `busy`. 헤드리스·창 모두.
+- `play_log` 는 restore 하면 그 시점으로 되돌린다 (재현 비교가 깨지지 않게).
+- 클라이언트: SDK `btqa_play.branch.Brancher` 가 선언을 보고 snapshot/재생을 고른다. 결과는 같아야 한다 — 다르면 게임 버그.
+
 ### 4.9 `error`, `bye`
 
 `PROTOCOL.md` 4.6·4.7 과 같다. 플레이 모드 코드:
@@ -364,7 +403,7 @@
 | 코드 | 언제 |
 |---|---|
 | `protocol_version` | `protocol` ≠ `"play"`, 버전 불일치 |
-| `bad_request` | JSON 오류, 인자 오류(reset 의 모르는 키, act 인자 없음), 전투 밖 `trigger_response` |
+| `bad_request` | JSON 오류, 인자 오류(reset 의 모르는 키·선언하지 않은 `options`, act 인자 없음), 전투 밖 `trigger_response`, 없는 snapshot id |
 | `unknown_type` | 모르는 메시지 |
 | `not_reset` | `reset` 전에 `act`/`observe` |
 | `unknown_action` | `actions` 에 없는 행동 |
@@ -421,6 +460,7 @@ LLM 연결 방식 (사용자 결정 2026-11-22, 2026-11-23 갱신): **본체 = �
 | 버전 | 날짜 | 내용 |
 |---|---|---|
 | 0.1 | 2026-11-22 | 초안 |
+| 0.3 (추가 2) | 2026-11-26 | **선택 기능만, 버전 그대로**: `reset_options` + `reset.options` (4.4.1, 안 본 시작 조건), `capabilities.snapshot` + `snapshot`/`restore` (4.11, 같은 상태 분기). 선언하지 않은 게임·쓰지 않는 클라이언트 모두 그대로 동작 (클라이언트는 선언했을 때만 보낸다) |
 | 0.3 (추가) | 2026-11-24 | **선택 필드만, 버전 그대로**: `actions[].description`·`actions[].schema`, `pilot_guide{system_prompt, about, rules, default_goal}`, `progress_keys` (4.2.1). 보내지 않는 게임·읽지 않는 클라이언트 모두 그대로 동작하므로 hello 버전을 올리지 않는다. 클라이언트 공통 부분 = SDK `btqa_play` (5장) |
 | 0.3 | 2026-11-23 | **전투 물약 = 인벤토리**(퀵슬롯 등록분, `min(보유, cap)`, 사용분 차감; `combat_started.potions`, `aftermath.potions_used`, `encounter_start_state:"barrier_inventory_potions"`). `pilot_note`(4.10) + `play_description.pilot_notes`. 클라이언트는 0.3 → 0.2 → 0.1 순으로 hello, 0.3 미만이면 메모를 보내지 않고 `run.json.pilot_notes` 에만 남긴다 |
 | 0.2 | 2026-11-23 | 0.6.2 구현 반영: hello 주.부 일치, reset 인자 제한, `scenarios{name,boss}`, `actions` 실제 목록(`ui_input` 제거), `combat.encounters`, 관찰 `quickslots`·퀘스트 `active/ready`·`marker`·`modal:"tip"`, `reason_detail` 형식, `engage`=done / `move_to`=interrupted(combat), 조우 seed 식, `combat_started`·`aftermath` 필드, `set_loadout` 전체 교체, 오류 표 |

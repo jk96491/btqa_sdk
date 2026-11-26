@@ -3,9 +3,13 @@
 한 단계 = 메시지 2개:
     system : 시스템 프롬프트(+목표) + 도구 목록 + 출력 형식     ← 판 내내 같은 글자 (CPU 추론에서 앞부분 캐시 재사용)
     user   : {"last_action": 직전 행동과 결과 | null, "observation": 지금 관찰}
+             (history=K 이면 맨 앞에 "recent_actions": 그 이전 행동 최대 K개 요약, 오래된 것부터)
 출력 (assistant) = JSON 한 개:  {"thought": "...", "tool": "<도구 이름>", "input": {...}}
 
-- 직전 행동 1개만 넣는다: 실패 reason(not_visible 등)을 모르면 같은 실패를 되풀이하기 때문. 그 이전 기록은 넣지 않는다.
+- 직전 행동 1개는 자세히 넣는다: 실패 reason(not_visible 등)을 모르면 같은 실패를 되풀이하기 때문.
+- history=K (선택, 기본 0 = 넣지 않음): 그 이전 행동 K개를 요약(tool·input·status·reason)으로 넣는다. 직전 하나만 보면
+  A·B 를 번갈아 하는 반복이나 같은 행동의 N번째 반복을 알 수 없다 (AI_QA r13: 등록 버튼 20번, 약초↔포털 왕복).
+  학습 형식과 실행 형식의 K 가 같아야 한다 — 기록(StepRecorder)에 history 를 남기고, 옛 기록은 dataset.add_history 로 다시 만든다.
 - action_schema(tools) = 출력 JSON Schema (도구마다 input 스키마가 다른 anyOf) → 서버가 문법으로 강제 (Ollama·llama.cpp)
 - LlmPilot(stateless)·JsonActionBackend·PilotRelay(기록)·StepRecorder 가 같은 함수를 쓴다 → 학습 형식 == 실행 형식
 """
@@ -55,10 +59,52 @@ def action_schema(tools: Sequence[Mapping[str, Any]]) -> Dict[str, Any]:
     return {"anyOf": variants}
 
 
-def step_input(observation: Mapping[str, Any], last_action: Optional[Mapping[str, Any]] = None) -> str:
-    """단계 형식의 user 메시지. observation 은 이미 줄인 것(compact_observation)."""
-    return json.dumps({"last_action": dict(last_action) if last_action else None, "observation": observation},
-                      ensure_ascii=False, separators=(",", ":"))
+def step_input(observation: Mapping[str, Any], last_action: Optional[Mapping[str, Any]] = None,
+               recent: Optional[Sequence[Mapping[str, Any]]] = None) -> str:
+    """단계 형식의 user 메시지. observation 은 이미 줄인 것(compact_observation).
+    recent: None = 기록 없음 (옛 형식 그대로), 리스트 = recent_actions (빈 리스트도 넣는다 — 판 첫 단계도 같은 모양)."""
+    d: Dict[str, Any] = {}
+    if recent is not None:
+        d["recent_actions"] = [dict(x) for x in recent]
+    d["last_action"] = dict(last_action) if last_action else None
+    d["observation"] = observation
+    return json.dumps(d, ensure_ascii=False, separators=(",", ":"))
+
+
+def history_entry(last_action: Mapping[str, Any]) -> Dict[str, Any]:
+    """last_action_record → recent_actions 한 칸 (짧게: tool·input·status·reason, 오류는 앞 80자, 전투는 cleared 만)."""
+    e: Dict[str, Any] = {"tool": last_action.get("tool"), "input": dict(last_action.get("input") or {})}
+    for k in ("status", "reason"):
+        if last_action.get(k) is not None:
+            e[k] = last_action[k]
+    if last_action.get("error"):
+        e["error"] = str(last_action["error"])[:80]
+    if last_action.get("combats"):
+        e["cleared"] = all(bool(c.get("cleared")) for c in last_action["combats"])
+    return e
+
+
+class ActionHistory:
+    """판 하나의 행동 기록 → step_input 의 (last_action, recent). k=0 이면 recent=None (옛 형식)."""
+
+    def __init__(self, k: int = 0):
+        if k < 0:
+            raise ValueError("history 는 0 이상")
+        self.k = int(k)
+        self._items: List[Dict[str, Any]] = []
+        self.last: Optional[Dict[str, Any]] = None
+
+    def push(self, last_action: Mapping[str, Any]) -> None:
+        if self.last is not None and self.k:
+            self._items.append(history_entry(self.last))
+            del self._items[:-self.k]
+        self.last = dict(last_action)
+
+    def recent(self) -> Optional[List[Dict[str, Any]]]:
+        return list(self._items) if self.k else None
+
+    def user(self, observation: Mapping[str, Any]) -> str:
+        return step_input(observation, self.last, self.recent())
 
 
 def last_action_record(tool: str, tool_input: Mapping[str, Any], out: Mapping[str, Any]) -> Dict[str, Any]:
@@ -100,4 +146,5 @@ def parse_action(text: str, tool_names: Sequence[str]) -> Tuple[Optional[Dict[st
 
 
 __all__ = ["ACTION_FORMAT", "with_goal", "action_system_prompt", "action_schema", "step_input", "last_action_record", "action_text",
+           "history_entry", "ActionHistory",
            "parse_action"]

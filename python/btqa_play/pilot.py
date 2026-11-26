@@ -20,7 +20,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Union
 
-from btqa_play.actions import action_system_prompt, last_action_record, step_input, with_goal
+from btqa_play.actions import ActionHistory, action_system_prompt, last_action_record, step_input, with_goal
 from btqa_play.client import PlayClient
 from btqa_play.llm.base import STOP_MAX_TOKENS, STOP_PAUSE, STOP_REFUSAL, LlmBackend, ToolResult
 from btqa_play.prompt import build_system_prompt, default_goal
@@ -43,6 +43,7 @@ class PilotConfig:
     extra_rules: Sequence[str] = ()   # 시스템 프롬프트에 덧붙일 규칙 (게임 안내 뒤)
     inspect_depth: int = 4            # inspect_ui 계층 깊이
     stateless: bool = False           # True = 단계마다 새 대화 (지금 관찰 + 직전 행동 결과만, actions.py) — 작은 로컬 모델·증류
+    history: int = 0                  # stateless 입력에 그 이전 행동 K개 요약 (recent_actions). 학습 데이터와 같은 K 로
 
 @dataclass
 class PilotRun:
@@ -223,13 +224,14 @@ class LlmPilot:
         obs: Mapping[str, Any] = dict(first_observation)
         run.last_observation = dict(obs)
         last_sig, stale, last = progress_signature(obs, keys), 0, None
+        hist = ActionHistory(cfg.history)
 
         while True:
             if run.api_calls >= cfg.max_calls:
                 run.end_reason = "max_calls"
                 break
             view = compact_observation(obs, drop)
-            user = step_input(view, last)
+            user = hist.user(view)
             ts = time.time()
             llm.start(system, tools, user)
             turn = llm.complete()
@@ -253,6 +255,7 @@ class LlmPilot:
                     run.end_reason = "game_error: %s" % e
                     out = {"error": str(e)}
             last = last_action_record(tool, inp, out)
+            hist.push(last)
             if self.recorder is not None:
                 self.recorder.write(record_system, user, view, thought, tool, inp, last, usage=turn.usage, latency_s=latency)
             run.transcript.append(dict(last, thought=thought, latency_s=latency, combats=out.get("combats")))

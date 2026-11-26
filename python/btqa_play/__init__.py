@@ -13,6 +13,9 @@
     actions / StepRecorder  단계 형식 (지금 관찰 + 직전 결과 → JSON 행동 1개) · 단계 기록 (작은 로컬 모델·증류)
     evaluate.run_batch      여러 seed 평가 → summary (기준선·증류 비교)
     dataset.build_dataset   단계 기록 → 학습용 train/val (학습 자체는 선택 패키지 btqa_distill)
+    review                  교사 라벨 검토 (실패한 정답·진척 없는 반복·불확실 → 해소)
+    suite.run_suite/compare 평가 스위트 (본 조건·강건성·안 본 조건) + 채택 판정 — SFT 이후(DPO·RFT) 판정
+    branch.Brancher         같은 상태에서 후보 행동 시험 (snapshot 또는 seed+prefix 재생)
 
 전투 응답기(trigger → params)는 SDK 밖이다: 학습 결과 형식에 묶이므로 쓰는 쪽이 callable 로 넘긴다.
 """
@@ -25,11 +28,14 @@ from btqa_play.dataset import DATASET_FORMAT, build_dataset
 from btqa_play.evaluate import parse_seeds, run_batch
 from btqa_play.record import STEP_FORMAT, StepRecorder, grounding_issues, read_steps
 from btqa_play.relay import DEFAULT_RELAY_PORT, PilotRelay, relay_step
+from btqa_play.branch import Brancher, Episode
+from btqa_play.review import label_flags, resolve, review_list
+from btqa_play.suite import SUITE_FORMAT, compare, load_suite, run_suite, validate_suite
 from btqa_play.spec import SPEC_FORMAT, PlaySpec, SpecError, as_spec, validate_spec
 from btqa_play.tools import (META_TOOLS, GameTools, build_tools, compact_observation, to_text, tool_sources,
                              validate_description)
 
-__version__ = "0.4.0"   # SDK 레포 버전 (btqa_game 과 같이 올린다)
+__version__ = "0.5.0"   # SDK 레포 버전 (btqa_game 과 같이 올린다)
 
 __all__ = [
     "PROTOCOL", "PROTOCOL_VERSION", "NOTE_KINDS", "BOSS_MISMATCH_CODES",
@@ -42,5 +48,7 @@ __all__ = [
     "action_schema", "action_system_prompt", "action_text", "parse_action", "step_input", "with_goal",
     "STEP_FORMAT", "StepRecorder", "grounding_issues", "read_steps",
     "DATASET_FORMAT", "build_dataset", "run_batch", "parse_seeds",
+    "Brancher", "Episode", "label_flags", "resolve", "review_list",
+    "SUITE_FORMAT", "compare", "load_suite", "run_suite", "validate_suite",
     "__version__",
 ]

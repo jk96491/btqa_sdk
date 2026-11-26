@@ -3,7 +3,7 @@ from setuptools import find_packages, setup
 
 setup(
     name="btqa-game",
-    version="0.4.0",
+    version="0.5.0",
     package_dir={"": "python"},
     packages=find_packages("python", include=["btqa_game*", "btqa_play*", "btqa_distill*"]),
     package_data={"btqa_play": ["*.json"], "btqa_distill": ["*.txt"]},

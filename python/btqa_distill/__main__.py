@@ -9,9 +9,14 @@
     gpu-variant --base qa-qwen1.5b-r8 --name qa-qwen1.5b-r8-gpu             등록한 모델의 GPU 변형 (같은 가중치, 따로 평가)
     export  --base Qwen/... --adapter <dir> --out-dir <dir> --llama-cpp <dir> --name M [--template-from qwen2.5:1.5b] [--gpu-name M-gpu]
                                                        merge → gguf → ollama 한 번에 (있는 중간 산출물은 건너뜀)
-    dpo     --base <SFT merged> --pairs pairs.jsonl --out <dir> [--beta 0.1 --lr 2e-5 --epochs 2]   선호 쌍 DPO → <out>/adapter
-    rft     --base <merged> --game H:P --scratch H:P --reward 모듈:함수 [--prepare 모듈:함수] [--spec F] --out <dir>
-                                                       GRPO (게임 = 채점기). 보상·판 준비는 게임 쪽 함수 (SDK 는 게임 내용을 모른다)
+    pairs-onpolicy --base <SFT merged> --game H:P --records steps.jsonl ... --reward 모듈:함수 --out pairs.jsonl
+                                                       학생 자신의 샘플 K개를 게임으로 채점한 선호 쌍 (DPO 기본 데이터)
+    dpo     --base <SFT merged> --pairs pairs.jsonl --out <dir> [--beta 0.1 --lr 5e-6 --nll-coef 0.2 --val-pairs V]
+                                                       선호 쌍 DPO(+chosen NLL) → <out>/adapter, adapter-ep<N>/
+    rft     --base <merged> --game H:P --scratch H:P --reward 모듈:함수 (--seeds 11 12 | --suite S [--group train])
+            [--prepare 모듈:함수] [--sft train.jsonl] [--adv-norm none] --out <dir>
+                                                       GRPO 계열 (게임 = 채점기), 판마다 ckpt-<n>/. 보상·판 준비는 게임 쪽 함수
+    채택은 학습 지표가 아니라 평가 스위트: python -m btqa_play eval ... → python -m btqa_play compare base.json cand.json
 
 산출물은 git 제외 경로(distill_out/ 등)에 — 모델 파일은 절대 커밋하지 않는다.
 """
@@ -116,17 +121,47 @@ def cmd_export(a: argparse.Namespace) -> int:
     return 0
 
 
+def _suite_episodes(path: Optional[str], group: str) -> Optional[list]:
+    """평가 스위트의 group 조건 → 학습 판 목록 (seed × repeats 가 아니라 seed 마다 1판)."""
+    if not path:
+        return None
+    from btqa_play.evaluate import parse_seeds
+    from btqa_play.suite import conditions, load_suite
+    out = []
+    for c in conditions(load_suite(path), groups=[group]):
+        for s in parse_seeds(str(c["seeds"])):
+            out.append({"seed": s, "class": c.get("class"), "options": c.get("options") or {}, "prepare": c.get("prepare") or {}})
+    if not out:
+        raise SystemExit("스위트 %s 에 group %r 조건이 없다" % (path, group))
+    return out
+
+
 def cmd_rft(a: argparse.Namespace) -> int:
     from btqa_play.hooks import load_hook
     from btqa_distill.rft import train_rft
-    print(train_rft(a.base, a.game, a.scratch, a.seeds, load_hook(a.reward), a.out, prepare=load_hook(a.prepare), spec=a.spec,
-                    cls=a.cls, k=a.k, max_steps=a.max_steps, lr=a.lr, kl_coef=a.kl))
+    print(train_rft(a.base, a.game, a.scratch, load_hook(a.reward), a.out, seeds=a.seeds or (),
+                    episodes=_suite_episodes(a.suite, a.group), prepare=load_hook(a.prepare), spec=a.spec,
+                    cls=a.cls, k=a.k, max_steps=a.max_steps, temperature=a.temperature, lr=a.lr, kl_coef=a.kl,
+                    adv_norm=a.adv_norm, min_gap=a.min_gap, follow=a.follow, sft=a.sft, sft_coef=a.sft_coef, passes=a.passes,
+                    history=a.history))
     return 0
 
 
 def cmd_dpo(a: argparse.Namespace) -> int:
     from btqa_distill.dpo import train_dpo
-    print(train_dpo(a.base, a.pairs, a.out, beta=a.beta, lr=a.lr, epochs=a.epochs, grad_accum=a.grad_accum))
+    print(train_dpo(a.base, a.pairs, a.out, beta=a.beta, lr=a.lr, epochs=a.epochs, grad_accum=a.grad_accum,
+                    nll_coef=a.nll_coef, val_pairs=a.val_pairs))
+    return 0
+
+
+def cmd_pairs_onpolicy(a: argparse.Namespace) -> int:
+    from btqa_play.hooks import load_hook
+    from btqa_distill.onpolicy import build_onpolicy_pairs
+    st = build_onpolicy_pairs(a.base, a.game, a.records, load_hook(a.reward), a.out, prepare=load_hook(a.prepare), spec=a.spec,
+                              cls=a.cls, prepare_args=json.loads(a.prepare_args) if a.prepare_args else None, k=a.k,
+                              temperature=a.temperature, margin=a.margin, max_states=a.max_states, every=a.every,
+                              include_target=a.include_target, history=a.history)
+    print(json.dumps(st, ensure_ascii=False))
     return 0
 
 
@@ -172,10 +207,30 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--pairs", required=True)
     p.add_argument("--out", required=True)
     p.add_argument("--beta", type=float, default=0.1)
-    p.add_argument("--lr", type=float, default=2e-5)
+    p.add_argument("--lr", type=float, default=5e-6)
     p.add_argument("--epochs", type=int, default=2)
     p.add_argument("--grad-accum", type=int, default=8)
+    p.add_argument("--nll-coef", type=float, default=0.2, help="chosen NLL 가중 (0 = 순수 DPO)")
+    p.add_argument("--val-pairs", help="검증 쌍 (epoch 마다 선호 정확도·마진)")
     p.set_defaults(fn=cmd_dpo)
+    p = sub.add_parser("pairs-onpolicy", help="학생 자신의 샘플을 게임으로 채점한 선호 쌍 (DPO 기본 데이터)")
+    p.add_argument("--base", required=True, help="학생 모델 (SFT merged)")
+    p.add_argument("--game", required=True, help="시험용 게임 (snapshot 또는 seed+prefix 재생)")
+    p.add_argument("--records", nargs="+", required=True, help="학생이 간 상태: 단계 기록 JSONL (평가·batch·DAgger)")
+    p.add_argument("--reward", required=True, help="보상 함수 '모듈:함수' (게임 쪽)")
+    p.add_argument("--prepare", help="판 준비 '모듈:함수' (게임 쪽)")
+    p.add_argument("--prepare-args", help="판 준비 인자 JSON")
+    p.add_argument("--spec")
+    p.add_argument("--cls", help="기록에 class 가 없을 때")
+    p.add_argument("--k", type=int, default=6)
+    p.add_argument("--temperature", type=float, default=0.9)
+    p.add_argument("--margin", type=float, default=0.5, help="최고 − 최저 보상이 이 이상인 상태만 쌍으로")
+    p.add_argument("--max-states", type=int, default=300)
+    p.add_argument("--every", type=int, default=1, help="판마다 N 단계에 하나")
+    p.add_argument("--include-target", action="store_true", help="기록의 정답(교사) 글도 후보로 채점")
+    p.add_argument("--history", type=int, help="기록 user 글을 history=K 형식으로 다시 만든다 (학생이 학습한 K)")
+    p.add_argument("--out", required=True)
+    p.set_defaults(fn=cmd_pairs_onpolicy)
     p = sub.add_parser("gpu-variant")
     p.add_argument("--base", required=True, help="등록한 Ollama 모델 (CPU 전용)")
     p.add_argument("--name", required=True)
@@ -196,15 +251,25 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--base", required=True, help="SFT 를 합친 모델 폴더")
     p.add_argument("--game", required=True, help="본 판 게임")
     p.add_argument("--scratch", required=True, help="분기 채점용 게임 (seed + prefix 재생)")
-    p.add_argument("--seeds", type=int, nargs="+", default=[11, 12])
+    p.add_argument("--seeds", type=int, nargs="+", help="학습 seed (평가 seed 와 따로) — 또는 --suite")
+    p.add_argument("--suite", help="평가 스위트 파일: --group 조건(seed·class·options·prepare)으로 학습")
+    p.add_argument("--group", default="train")
     p.add_argument("--reward", required=True, help="보상 함수 '모듈:함수' (obs_before, tool, input, out) → float")
     p.add_argument("--prepare", help="판 시작 준비 '모듈:함수' (client, describe) → 전투 응답기 등")
     p.add_argument("--spec", help="외부 플레이 스펙 파일")
     p.add_argument("--cls")
     p.add_argument("--k", type=int, default=4)
     p.add_argument("--max-steps", type=int, default=45)
-    p.add_argument("--lr", type=float, default=1e-5)
-    p.add_argument("--kl", type=float, default=0.05)
+    p.add_argument("--temperature", type=float, default=0.9)
+    p.add_argument("--lr", type=float, default=5e-6)
+    p.add_argument("--kl", type=float, default=0.05, help="k3 KL 가중")
+    p.add_argument("--adv-norm", choices=["none", "std"], default="none", help="none = r − 평균 (작은 점수 차를 키우지 않는다)")
+    p.add_argument("--min-gap", type=float, default=0.1, help="그룹 최고−최저가 이보다 작으면 갱신 안 함")
+    p.add_argument("--follow", choices=["best", "greedy", "sample"], default="best")
+    p.add_argument("--sft", help="SFT train.jsonl — 갱신마다 샘플 1개 NLL 을 섞는다")
+    p.add_argument("--sft-coef", type=float, default=0.1)
+    p.add_argument("--passes", type=int, default=1, help="학습 판 목록 반복 횟수")
+    p.add_argument("--history", type=int, default=0, help="학생 입력의 recent_actions 개수 (학습 형식과 같게)")
     p.add_argument("--out", required=True)
     p.set_defaults(fn=cmd_rft)
     a = ap.parse_args(argv)

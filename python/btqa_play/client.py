@@ -195,13 +195,40 @@ class PlayClient:
             msg["persona"] = persona
         return self.call(msg, "loadout_ok")
 
-    def reset(self, seed: Optional[int] = None, cls: Optional[str] = None) -> Dict[str, Any]:
+    def reset(self, seed: Optional[int] = None, cls: Optional[str] = None,
+              options: Optional[Mapping[str, Any]] = None) -> Dict[str, Any]:
+        """options = 게임이 play_description.reset_options 로 선언한 시작 조건만 (4.4.1, 선택). 선언하지 않은 키는 보내기 전에 거부."""
         msg: Dict[str, Any] = {"type": "reset"}
         if seed is not None:
             msg["seed"] = int(seed)
         if cls is not None:
             msg["class"] = cls
+        if options:
+            unknown = sorted(set(options) - set(self.reset_option_names))
+            if unknown:
+                raise PlayError("unknown_reset_option", "게임이 선언하지 않은 reset 옵션 %s (선언: %s)"
+                                % (unknown, sorted(self.reset_option_names)))
+            msg["options"] = dict(options)
         return self.call(msg, "observation")
+
+    @property
+    def reset_option_names(self) -> List[str]:
+        """play_description.reset_options 선언 이름 (4.4.1). 선언이 없으면 빈 목록."""
+        ro = self.description.get("reset_options") or []
+        return [str(o.get("name")) for o in ro if isinstance(o, Mapping) and o.get("name")]
+
+    @property
+    def supports_snapshot(self) -> bool:
+        """게임이 snapshot/restore(4.11, 선택)를 선언했는가."""
+        return bool((self.description.get("capabilities") or {}).get("snapshot"))
+
+    def snapshot(self) -> str:
+        """지금 게임 상태를 저장하고 id 를 받는다 (4.11). 같은 연결 안에서만 유효."""
+        return str(self.call({"type": "snapshot"}, "snapshot_ok")["id"])
+
+    def restore(self, snapshot_id: str) -> Dict[str, Any]:
+        """저장한 상태로 되돌리고 그때의 관찰을 받는다 (4.11)."""
+        return self.call({"type": "restore", "id": snapshot_id}, "observation")
 
     def observe(self, mode: str = "semantic", **kw: Any) -> Dict[str, Any]:
         return self.call(dict({"type": "observe", "mode": mode}, **kw), "observation")

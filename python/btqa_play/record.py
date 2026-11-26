@@ -5,7 +5,9 @@
      "messages": [{"role":"system","content":...}, {"role":"user","content":...}],   ← 학생이 받는 입력 그대로 (actions.py)
      "target": {"thought","tool","input"},  "target_text": "<assistant 출력 JSON>",   ← 학습 목표
      "result": {status, reason, ...},  "usage": {input_tokens, output_tokens},  "latency_s",
-     "grounding": ["…"]}                                                           ← 입력에 근거 없는 행동 (빈 목록 = 통과)
+     "grounding": ["…"],                                                           ← 입력에 근거 없는 행동 (빈 목록 = 통과)
+     "episode": {"seed", "class", "options"},                                      ← 판 시작 조건 (분기 재생·on-policy 쌍용, 선택)
+     "needs_review": ["label_failed", …], "uncertain": true, "edited": "<이유>", "reviewed": "<메모>"}   ← 라벨 검토 (review.py)
 
 grounding 검사: 교사가 학생이 볼 수 없는 정보(대화 기록·기억)로 판단한 샘플을 골라내기 위한 것.
     - 행동 인자의 문자열 id(target·ui_id·item_id 등)가 그 단계 입력(user 메시지)에 없으면 "id_not_in_input:<값>"
@@ -54,12 +56,14 @@ def grounding_issues(user_text: str, observation: Mapping[str, Any], tool_input:
 class StepRecorder:
     """JSONL 에 한 단계씩 덧붙인다. run = 판 이름 (같은 파일에 여러 판)."""
 
-    def __init__(self, path: Union[str, Path], run: str, source: str = "teacher", model: str = "") -> None:
+    def __init__(self, path: Union[str, Path], run: str, source: str = "teacher", model: str = "",
+                 episode: Optional[Mapping[str, Any]] = None) -> None:
         if source not in ("teacher", "model"):
             raise ValueError("source 는 teacher 또는 model")
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.run, self.source, self.model = run, source, model
+        self.episode = {k: v for k, v in dict(episode or {}).items() if v not in (None, {}, "")}
         self.step = 0
         self.flagged = 0
 
@@ -75,6 +79,8 @@ class StepRecorder:
                "target": {"thought": thought, "tool": tool, "input": dict(tool_input)},
                "target_text": action_text(thought, tool, tool_input),
                "result": dict(result), "usage": dict(usage or {}), "latency_s": latency_s, "grounding": g}
+        if self.episode:
+            rec["episode"] = dict(self.episode)
         if extra:
             rec.update({k: v for k, v in extra.items() if k not in rec})   # 예 student = 교정 모드 학생 제안 (DPO 의 rejected)
         with self.path.open("a", encoding="utf-8") as f:
@@ -82,8 +88,65 @@ class StepRecorder:
         return rec
 
 
+def with_history(records: Iterable[Mapping[str, Any]], k: int) -> List[Dict[str, Any]]:
+    """기록의 user 글을 history=K 형식으로 다시 만든다 (actions.ActionHistory 와 같은 결과). k=0 이면 recent_actions 를 뗀다.
+
+    판(run)마다 step 순서로, 앞 단계들 user 의 last_action(= 실제로 실행된 행동) 을 이어 붙인다. step 이 끊긴 곳에서는
+    그 이전을 모르므로 기록을 비우고 다시 시작한다. 입력 순서는 지킨다 (판 안의 순서만 쓴다)."""
+    from btqa_play.actions import ActionHistory, step_input
+    recs = [dict(r) for r in records]
+    order: Dict[str, List[int]] = {}
+    for i, r in enumerate(recs):
+        order.setdefault(str(r.get("run")), []).append(i)
+    for idx in order.values():
+        idx.sort(key=lambda i: int(recs[i].get("step") or 0))
+        hist, prev_step = ActionHistory(k), None
+        for i in idx:
+            r = recs[i]
+            msgs = r.get("messages") or []
+            if len(msgs) != 2:
+                continue
+            try:
+                d = json.loads(msgs[1]["content"])
+            except (ValueError, TypeError):
+                continue
+            step = int(r.get("step") or 0)
+            if prev_step is not None and step != prev_step + 1:
+                hist = ActionHistory(k)
+            prev_step = step
+            la = d.get("last_action")
+            if la is None:           # 판 첫 단계
+                hist = ActionHistory(k)
+            else:
+                hist.push(la)
+            text = step_input(d.get("observation") or {}, la, hist.recent())
+            r["messages"] = [dict(msgs[0]), dict(msgs[1], content=text)]
+    return recs
+
+
 def read_steps(path: Union[str, Path]) -> List[Dict[str, Any]]:
     return [json.loads(line) for line in Path(path).read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
-__all__ = ["STEP_FORMAT", "StepRecorder", "grounding_issues", "read_steps"]
+def write_steps(path: Union[str, Path], records: Iterable[Mapping[str, Any]]) -> None:
+    """기록 전체를 다시 쓴다 (검토 결과 반영 등). 임시 파일에 쓰고 바꾼다."""
+    p = Path(path)
+    tmp = p.with_suffix(p.suffix + ".tmp")
+    with tmp.open("w", encoding="utf-8") as f:
+        for r in records:
+            f.write(json.dumps(r, ensure_ascii=False) + "\n")
+    tmp.replace(p)
+
+
+def episode_of(rec: Mapping[str, Any]) -> Dict[str, Any]:
+    """기록 한 줄의 판 시작 조건. episode 필드가 없는 예전 기록은 run 이름 끝 '-s<seed>' 에서 seed 만."""
+    import re
+    ep = dict(rec.get("episode") or {})
+    if "seed" not in ep:
+        m = re.search(r"-s(\d+)$", str(rec.get("run") or ""))
+        if m:
+            ep["seed"] = int(m.group(1))
+    return ep
+
+
+__all__ = ["STEP_FORMAT", "StepRecorder", "grounding_issues", "read_steps", "write_steps", "episode_of", "with_history"]

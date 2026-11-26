@@ -1,6 +1,26 @@
 # 변경 이력
 
-## 미배포 (0.4.x) — 2026-11-25
+## 0.5.0 — 2026-11-26
+
+**SFT 이후(DPO·RFT)를 판정할 수 있는 파이프라인 + 교사 라벨 검토.** 밸런스 프로토콜 1.4 그대로, 플레이 0.3 에 **선택 기능**만 추가 (hello 버전 유지). `btqa_game`·Unity 패키지 코드 변화 없음 (버전만).
+AI_QA 첫 시도(2026-11-25)에서 DPO·RFT 가 모두 후퇴한 원인 — 포화된 평가, seed 가 바꾸지 않는 판, 18개 off-policy 쌍, std 로 키운 한 판 신호 — 을 SDK 쪽에서 막는다. 게임 내용은 넣지 않았다 (조건 값·보상·상황 키는 게임 쪽 파일·훅).
+
+- 플레이 프로토콜 0.3 (추가 2, 선택): `play_description.reset_options` + `reset.options` (4.4.1, 안 본 시작 조건), `capabilities.snapshot` + `snapshot`/`restore` (4.11, 같은 상태 분기). `PlayClient.reset(options=)` (선언하지 않은 키는 보내기 전에 `unknown_reset_option`), `reset_option_names`, `supports_snapshot`, `snapshot()`, `restore()`
+- `btqa_play.branch`: `Brancher`(snapshot 선언 시 snapshot/restore, 아니면 seed+prefix 재생, 같은 행동 한 번만), `Episode`(seed·class·options·prepare 인자), `prefixes`·`executed_action`(교정 모드의 실제 실행 행동), `call_prepare`(prepare 훅에 조건 인자)
+- `btqa_play.review` + relay: 정답으로 기록한 행동이 실패(`label_failed`)하거나 진척 없이 반복(`repeat_no_progress`, progress_keys 서명)하면 응답 `warning` + 기록 `needs_review`. `step --unsure` → 기록 `uncertain`(생각 문장에 글자로 넣지 않음). `approve` 는 경고에서 멈춤. CLI `review`·`resolve`(맞음 `reviewed` / 정답 고침 `edited` + `original_target`)
+- `dataset`: 해소되지 않은 `needs_review` 기본 제외(`--keep-unreviewed`), `uncertain_kept` 집계(`--drop-uncertain`), `--situation-key 모듈:함수` → `situation_conflicts`(+예시). `pairs` 는 off-policy 보조로 명시
+- `btqa_play.suite` (`btqa-eval-suite/1`): 조건(seen·robust·unseen·train 묶음, seed·class·options·prepare·temperature·repeats), Wilson·평균 95% 구간, 다른 궤적·시작 상태 수, 경고(시작 상태 같음·탐욕 궤적 같음), 선언 안 된 옵션 조건 건너뜀. `compare` 채택 판정(`must_not_regress`·`improve_any`·`min_gain`·`tolerance`, 포화·구간 겹침 경고). CLI `suite`·`eval`·`compare`
+- 기록: `StepRecorder(episode=)` → 줄마다 `episode`(seed·class·options), `write_steps`, `episode_of`(예전 기록은 run 이름 `-s<seed>`). relay `--reset-options`, `PilotRelay(options=)`
+- `btqa_distill.policy.LoraPolicy` (DPO·RFT·on-policy 공통: 로드·샘플·답 구간 log π·기준 모델), `k3_kl`, `sft_nll`
+- `btqa_distill.onpolicy` + CLI `pairs-onpolicy`: 학생이 간 상태(평가 steps.jsonl)에서 학생 샘플 K개를 게임 보상으로 채점 → (최고, 최저) 쌍 (margin 이상, 재생 관찰이 기록과 다르면 건너뜀, `--include-target`)
+- `dpo`: `nll_coef`(chosen 토큰 평균 NLL, 기본 0.2), `val_pairs`(검증 선호 정확도·마진), epoch 마다 `adapter-ep<N>/`, 기본 lr 5e-6
+- `rft`: `episodes`(스위트 `--suite --group train`), `passes`, 이점 `adv_norm`(기본 none = r − 평균), 탐욕 출력은 그룹 밖, k3 KL, `sft`·`sft_coef` NLL 섞기, `min_gap`, `follow`(best·greedy·sample), 판마다 `ckpt-<n>/`, 분기는 `btqa_play.branch.Brancher`(snapshot). 시그니처 변경: `train_rft(base, game, scratch, reward_fn, out_dir, seeds=…|episodes=…)`
+- 문서 `DISTILL_SDK.md` 5장 교사 규칙(게임 무관)·6장 SFT 이후 절차·7장 게임 쪽이 줄 것
+- `relay_auto(rules)` + CLI `auto --rules 모듈:함수`: 교정 모드 자동 진행 — 게임 쪽 규칙이 학생 제안을 보고 승인 / 규칙 정답으로 교정 / `{"defer"}` 교사에게. 경고·학생 오류·같은 규칙 반복에서 멈춤
+- **단계 형식 `history=K` (선택, 기본 0 = 옛 형식 그대로)**: user 맨 앞에 `recent_actions` = 직전 행동 이전 K개 요약(tool·input·status·reason, 오래된 것부터). 직전 하나만 보면 A·B 번갈아·같은 행동 N번째 반복을 알 수 없다 (AI_QA r13). `actions.ActionHistory`·`history_entry`, `step_input(recent=)`, `PilotConfig(history=)`·`PilotRelay(history=)`·`run_suite(history=)`·`train_rft(history=)`·`build_onpolicy_pairs(history=)`, 옛 기록 → 새 형식 `record.with_history(records, K)` (판·step 순서, step 이 끊기면 비움) + `dataset`·`pairs` `history=`. CLI `--history` (play·relay·batch·eval·dataset·pairs·rft·pairs-onpolicy). 학습 K 와 실행 K 가 같아야 한다 — 평가 요약에 `history`
+- relay 반복 표시(`repeat_no_progress`)는 진척 키 **또는** 관찰 상태(창·대화 글)가 바뀌면 진척으로 본다 (대화 넘기기 같은 버튼 반복 오탐 수정)
+
+## 0.4.x (미배포분) — 2026-11-25
 
 증류 후반 단계 (프로토콜·`btqa_game`·Unity 패키지 변화 없음).
 

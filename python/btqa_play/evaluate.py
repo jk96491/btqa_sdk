@@ -5,6 +5,7 @@
 
 - client 는 hello·describe(·set_loadout)를 마친 상태. 판마다 reset(seed) 로 새 게임 (PLAY_PROTOCOL 4.4).
 - 판별 PilotRun → run-s<seed>.json, 단계 기록(record=True, stateless) → steps.jsonl (record.py 형식), 요약 → summary.json
+- 후속 학습(DPO·RFT) 판정은 이것이 아니라 평가 스위트(suite.py: 본 조건·강건성·안 본 조건 + 채택 규칙)로 한다.
 - 게임 고유 판단 없음: "완료한 퀘스트" = play_log 의 quest_completed 사건, 전체 = play_description.quests 수 (프로토콜 4.2·4.8)
 """
 from __future__ import annotations
@@ -76,7 +77,7 @@ def run_batch(client: PlayClient, backend: LlmBackend, seeds: Sequence[int], con
     rows = []
     for seed in seeds:
         rec = StepRecorder(steps, run="batch-%s-s%d" % (time.strftime("%Y%m%d-%H%M%S"), seed), source="model",
-                           model=backend.label) if steps else None
+                           model=backend.label, episode={"seed": seed, "class": cls}) if steps else None
         run_cfg = PilotConfig(**dict(cfg.__dict__, stateless=cfg.stateless or rec is not None))
         obs = client.reset(seed=seed, cls=cls)
         run = LlmPilot(client, responder=responder, config=run_cfg, backend=backend, spec=spec, recorder=rec).run(obs)

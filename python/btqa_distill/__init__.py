@@ -15,6 +15,6 @@ btqa_play 가 만든 데이터를 쓴다:
 """
 from btqa_distill.config import QWEN_TARGETS, TrainConfig
 
-__version__ = "0.4.0"   # SDK 레포 버전 (btqa_game·btqa_play 와 같이)
+__version__ = "0.5.0"   # SDK 레포 버전 (btqa_game·btqa_play 와 같이)
 
 __all__ = ["TrainConfig", "QWEN_TARGETS", "__version__"]
