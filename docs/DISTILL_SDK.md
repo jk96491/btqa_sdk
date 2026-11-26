@@ -30,6 +30,7 @@
 | 교정 (DAgger) | `python -m btqa_play relay --game H:P --record dagger.jsonl --student <Ollama 모델>` → `step view` (학생 제안) → 맞으면 `approve [N]`, 틀리면 `step <tool> '<json>' --think ".."` (교사 정답 실행) |
 | 데이터셋 | `python -m btqa_play dataset teacher*.jsonl dagger*.jsonl --out data/v1 [--val-runs -s5] [--correction-weight 3] [--prep 모듈:함수]` |
 | 자동 교정 (DAgger) | `python -m btqa_play auto --rules 모듈:함수 [--port P]` — 게임 쪽 규칙 `(step_input, 학생 제안) → None(승인) / 정답 dict(교정) / {"defer"}(교사)`. 규칙은 입력만 본다. 경고·defer 에서 멈추면 교사가 `step` 으로 이어 간다 |
+| 데이터 조건 검사 | `python -m btqa_play dataset ... --suite S` → `stats.json` `checks` (평가 조건과 같은 판·시작 상태 수, 경고는 stderr) — 5.1장 |
 | 라벨 검토 | `python -m btqa_play review teacher*.jsonl dagger*.jsonl` → `resolve <파일> --run R --step N --note ".." [--tool T --input '{..}']` |
 | DPO 쌍 (off-policy) | `python -m btqa_play pairs dagger*.jsonl --out pairs.jsonl [--prep 모듈:함수]` (chosen = 교사, rejected = 학생, 행동이 다른 단계만) — 보조용, 기본은 on-policy (6장) |
 | 평가 스위트 | `python -m btqa_play suite S` (형식 검사) · `eval --game H:P --suite S --model M [--prepare 모듈:함수]` → `summary.json` + `steps.jsonl` · `compare base.json cand.json` |
@@ -99,6 +100,24 @@ venv_distill\Scripts\python.exe -m btqa_distill rft --base distill_out/r1/merged
 
 자동 검사 (SDK): `label_failed`·`repeat_no_progress` 표시(relay), `grounding`(기록기), 같은 입력 다른 행동 `conflicting_inputs`·같은 상황 다른 도구 `situation_conflicts`·생각 문장만 다른 `thought_variants`(dataset).
 **"진척"의 뜻은 게임이 정한다** (`progress_keys`, PLAY_PROTOCOL 4.2.1) — SDK 는 그 값이 바뀌었는지만 본다.
+
+### 5.1 DAgger 가 효과를 내는 조건 (게임 무관 체크리스트)
+
+AI_QA 에서 같은 모델·설정에 DAgger 데이터만 바꿔 본 판 완주가 0/5 → 5/5 로 갈렸다 (AI_QA `docs/DISTILL.md` 8.6). 교정 **수**보다 **어떻게 모았는지**가 갈랐다.
+새 게임에 적용할 때 아래 넷을 먼저 확인한다.
+
+| 조건 | 확인 방법 | 어겼을 때 본 증상 |
+|---|---|---|
+| 1. **학생이 실제로 간 상태** (on-policy) | relay `--student` / `auto` — 교사 판만으로 끝내지 않는다 | 교사가 안 가는 장면(학생이 틀려서 들어간 상태)에서 막힌다 |
+| 2. **판마다 다른 시작 상태, 평가와 분리** | `dataset --suite S` → `checks` (평가 조건과 같은 판 = 누수 경고, 시작 상태 수). 스위트 `train` 묶음으로만 모은다. 게임 쪽 seed 변화 검사 | 학생이 규칙이 아니라 수치·문장을 외운다. 평가 점수가 실력보다 높게 나온다 (판 N개 = 사실상 1판) |
+| 3. **일관되고 검증된 라벨** | 승인은 하나씩 (5장 2), relay 경고(`label_failed`·`repeat_no_progress`) → `review`/`resolve`, `dataset --situation-key` 상황 충돌, (선택) 게임 쪽 규칙 교사 `auto --rules` | 몰아 승인한 틀린 라벨, 비슷한 입력에 다른 정답이 섞여 다른 장면이 새로 흔들린다 |
+| 4. **실제로 돌릴 장치·양자화의 학생** | DAgger·평가 모두 같은 장치 (예: CPU Q4) | 같은 가중치가 장치를 바꾸면 갈림길이 뒤집힌다 |
+
+함께 알아 둘 것:
+- **입력은 거의 같은데 정답이 다른 장면**은 교정 수를 늘려도 잘 안 고쳐진다. 게임 쪽 전처리(`--prep`)가 그 차이를 **입력에서 옮겨 적는 단서**로 드러내야 한다. 학생이 자기 반복을 모르면 `--history K` (2장).
+- 교사(대화형 에이전트)는 판 전체를 기억한다. 판 전체는 원인 단계를 찾는 데만 쓰고, 정답은 그 단계 입력만으로 정당화될 때만 붙인다 (5장 1).
+- 규칙 교사는 본 장면만 안다. 판을 돌며 규칙이 놓친 장면을 라벨 고침 + 규칙 추가로 메우고, 기존 교사 기록에 규칙을 돌려 오탐이 없는지 확인한다.
+- 재학습할 때마다 막히는 장면이 바뀔 수 있다 — 판정은 장면 하나가 아니라 평가 스위트로 (6장).
 
 ## 6. SFT 이후: DPO·RFT 를 의미 있게 (게임 무관 절차)
 

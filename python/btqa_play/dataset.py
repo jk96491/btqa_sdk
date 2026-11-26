@@ -27,7 +27,7 @@ import hashlib
 import json
 import random
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple, Union
+from typing import Mapping, Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple, Union
 
 Prep = Callable[[Dict[str, Any]], Dict[str, Any]]
 
@@ -94,10 +94,11 @@ def build_dataset(inputs: Sequence[Union[str, Path]], out_dir: Union[str, Path],
                   val_runs: Optional[Sequence[str]] = None, correction_weight: int = 1,
                   prep: Optional[Prep] = None, situation_key: Optional[Callable[[str], str]] = None,
                   keep_unreviewed: bool = False, drop_uncertain: bool = False,
-                  history: Optional[int] = None) -> Dict[str, Any]:
+                  history: Optional[int] = None, suite: Optional[Mapping[str, Any]] = None) -> Dict[str, Any]:
     """val_runs: 검증으로 뺄 판(run) 이름 — 주면 val_ratio 무작위 선택 대신 이것 (예: 교정 판은 학습에 두고 교사 판으로 검증).
     correction_weight: 교정 단계를 train 에 몇 번 넣을지 (val 은 항상 1번). prep: 샘플 전처리 (train·val 모두).
     situation_key: user 글 → 상황 키 (게임 쪽). 같은 상황에 다른 도구 = situation_conflicts (stats 에 예시).
+    suite: 평가 스위트 — 주면 stats["checks"] = suite.data_checks (평가 누수·시작 상태 다양성, DISTILL_SDK.md 5.1).
     history: None = 기록의 user 글 그대로, K = 단계 입력을 history=K 형식으로 다시 만든다 (record.with_history — 실행 쪽 K 와 같게)."""
     if correction_weight < 1:
         raise ValueError("correction_weight 는 1 이상")
@@ -185,6 +186,9 @@ def build_dataset(inputs: Sequence[Union[str, Path]], out_dir: Union[str, Path],
              "prep": getattr(prep, "__module__", None) and "%s:%s" % (prep.__module__, prep.__name__), "tools": tools,
              "mean_chars": {"user": _mean(train + val, 1), "assistant": _mean(train + val, 2)},
              "distinct_systems": len({s["messages"][0]["content"] for s in train + val}), "history": history}
+    if suite is not None:
+        from btqa_play.suite import data_checks
+        stats["checks"] = data_checks(kept, suite)
     (out / "stats.json").write_text(json.dumps(stats, ensure_ascii=False, indent=2), encoding="utf-8")
     return stats
 

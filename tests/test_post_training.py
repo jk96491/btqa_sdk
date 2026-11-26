@@ -399,3 +399,28 @@ class HistoryTest(unittest.TestCase):
         out = with_history([rec(1, None), rec(2, a), rec(3, a), rec(7, a), rec(8, a)], 3)
         n = [len(json.loads(r["messages"][1]["content"])["recent_actions"]) for r in out]
         self.assertEqual(n, [0, 0, 1, 0, 1])                                     # 4~6 이 빠졌으면 그 이전은 모른다
+
+
+from btqa_play.suite import data_checks  # noqa: E402
+
+
+class DataChecksTest(unittest.TestCase):
+    """DAgger 조건 (DISTILL_SDK.md 5.1): 평가 누수·시작 상태 다양성."""
+
+    @staticmethod
+    def _rec(run, seed, start, cls=None):
+        ep = {"seed": seed} if cls is None else {"seed": seed, "class": cls}
+        return {"run": run, "step": 1, "episode": ep,
+                "messages": [{"role": "system", "content": "s"}, {"role": "user", "content": step_input({"n": start, "seq": seed})}]}
+
+    def test_eval_overlap_and_same_start(self):
+        recs = [self._rec("a", 1, 0), self._rec("b", 2, 0), self._rec("c", 11, 0)]
+        ch = data_checks(recs, SUITE)
+        self.assertEqual(ch["eval_overlap_runs"], ["a", "b"])                      # seen 1-3 와 같은 판
+        self.assertEqual(ch["distinct_start_states"], 1)                             # seq 는 빼고 본다
+        self.assertEqual(len(ch["warnings"]), 2)
+
+    def test_clean_data_has_no_warning(self):
+        recs = [self._rec("t%d" % i, 10 + i, i) for i in range(4)]
+        ch = data_checks(recs, SUITE)
+        self.assertEqual((ch["eval_overlap_runs"], ch["warnings"], ch["distinct_start_states"]), ([], [], 4))

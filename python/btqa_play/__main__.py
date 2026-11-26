@@ -147,12 +147,17 @@ def cmd_batch(a: argparse.Namespace) -> int:
 def cmd_dataset(a: argparse.Namespace) -> int:
     from btqa_play.dataset import build_dataset
     from btqa_play.hooks import load_hook
+    from btqa_play.suite import load_suite
     st = build_dataset(a.inputs, a.out, val_ratio=a.val_ratio, seed=a.seed, sources=tuple(a.sources),
                        keep_ungrounded=a.keep_ungrounded, val_runs=a.val_runs, correction_weight=a.correction_weight,
                        prep=load_hook(a.prep), situation_key=load_hook(a.situation_key),
-                       keep_unreviewed=a.keep_unreviewed, drop_uncertain=a.drop_uncertain, history=a.history)
+                       keep_unreviewed=a.keep_unreviewed, drop_uncertain=a.drop_uncertain, history=a.history,
+                       suite=load_suite(a.suite) if a.suite else None)
     print(json.dumps({k: st[k] for k in ("read", "kept", "dropped", "conflicting_inputs", "thought_variants", "situation_conflicts",
-                                         "uncertain_kept", "runs", "train", "val", "corrections", "tools", "history")}, ensure_ascii=False))
+                                         "uncertain_kept", "runs", "train", "val", "corrections", "tools", "history", "checks")
+                      if k in st}, ensure_ascii=False))
+    for w in (st.get("checks") or {}).get("warnings") or []:
+        print("경고:", w, file=sys.stderr)
     print("→", a.out, "(train.jsonl / val.jsonl / stats.json) — git 제외 경로에 둘 것")
     return 0
 
@@ -375,6 +380,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--situation-key", help="user 글 → 상황 키 '모듈:함수' (게임 쪽) — 같은 상황 다른 도구를 센다")
     p.add_argument("--keep-unreviewed", action="store_true", help="해소 안 된 needs_review 도 남긴다 (기본: 뺀다)")
     p.add_argument("--drop-uncertain", action="store_true", help="교사가 불확실 표시한 줄을 뺀다 (기본: 남기고 센다)")
+    p.add_argument("--suite", help="평가 스위트 — 평가 누수·시작 상태 다양성 검사 (stats.checks, 경고 출력)")
     p.add_argument("--history", type=int, help="user 글을 history=K 형식으로 다시 만든다 (없으면 기록 그대로)")
     p.set_defaults(fn=cmd_dataset)
 

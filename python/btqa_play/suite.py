@@ -288,3 +288,45 @@ def compare(base: Mapping[str, Any], cand: Mapping[str, Any], adopt: Optional[Ma
 
 __all__ = ["SUITE_FORMAT", "TRAIN_GROUP", "validate_suite", "load_suite", "conditions", "wilson", "mean_ci", "aggregate",
            "run_suite", "compare", "start_state_hash", "trajectory_hash"]
+
+
+# ------------------------------------------------------------------ DAgger·학습 데이터 조건 검사 (DISTILL_SDK.md 5.1)
+def data_checks(records: Sequence[Mapping[str, Any]], suite: Optional[Mapping[str, Any]] = None) -> Dict[str, Any]:
+    """학습에 쓸 단계 기록이 DAgger 조건을 지키는지 (게임 무관).
+
+    - 평가 누수: 기록의 판(seed·class·options)이 스위트 평가 조건(train 묶음 제외)과 같으면 그 판을 센다.
+      예전 기록처럼 class 를 모르면 seed 만으로 겹침을 본다 (보수적으로 경고).
+    - 시작 상태 다양성: 판마다 첫 단계 관찰(변하는 키 제외)의 해시 — 판이 여러 개인데 시작 상태가 하나면 seed 가 판을 바꾸지 않는다.
+    - 판 시작 조건 수: 서로 다른 (seed, class, options).
+    결과 {"runs", "episodes", "distinct_start_states", "eval_overlap_runs", "warnings"}."""
+    from btqa_play.record import episode_of
+    first: Dict[str, Mapping[str, Any]] = {}
+    for r in records:
+        run = str(r.get("run"))
+        if run not in first or int(r.get("step") or 0) < int(first[run].get("step") or 0):
+            first[run] = r
+    starts, eps, overlap = set(), set(), []
+    evals = []
+    for c in conditions(suite or {}):
+        evals.append((c.get("class"), json.dumps(c.get("options") or {}, sort_keys=True), set(parse_seeds(str(c["seeds"])))))
+    for run, r in first.items():
+        try:
+            obs = json.loads(r["messages"][1]["content"]).get("observation") or {}
+            starts.add(_hash({k: v for k, v in obs.items() if k not in _VOLATILE}))
+        except (KeyError, IndexError, ValueError, TypeError, AttributeError):
+            pass
+        ep = episode_of(r)
+        opts = json.dumps(ep.get("options") or {}, sort_keys=True)
+        eps.add((ep.get("seed"), ep.get("class"), opts))
+        if "seed" in ep and any(int(ep["seed"]) in seeds and (ep.get("class") is None or cls is None or ep.get("class") == cls)
+                                and opts == copts for cls, copts, seeds in evals):
+            overlap.append(run)
+    warn = []
+    if overlap:
+        warn.append("평가 조건과 같은 판 %d개 — 평가가 학습에 샌다 (스위트 train 묶음으로 모은다)" % len(overlap))
+    if len(first) > 1 and len(starts) <= 1:
+        warn.append("판 %d개의 시작 상태가 모두 같다 — seed 가 판을 바꾸지 않는다 (게임에 seed 변화·reset.options 요청)" % len(first))
+    elif len(first) >= 4 and len(starts) * 2 <= len(first):
+        warn.append("시작 상태 %d가지 / 판 %d개 — 같은 판이 많다" % (len(starts), len(first)))
+    return {"runs": len(first), "episodes": len(eps), "distinct_start_states": len(starts),
+            "eval_overlap_runs": sorted(overlap), "warnings": warn}
