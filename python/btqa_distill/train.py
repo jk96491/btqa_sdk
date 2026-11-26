@@ -5,7 +5,7 @@
 - max_len 보다 긴 샘플은 자르지 않고 뺀다 (system 이 잘리면 실행 때와 입력이 달라진다). 뺀 수는 로그에.
 - 기반 가중치 = cfg.dtype(bf16 권장), LoRA 파라미터 = float32 + autocast. QLoRA(4bit)는 쓰지 않는다 (Windows bitsandbytes 회피,
   1.5B~3B 는 12GB 에 bf16 로 들어간다).
-- 출력: <out_dir>/adapter/ (PEFT), tokenizer, train_log.json (손실·설정·뺀 샘플). **out_dir 은 git 제외 경로**로.
+- 출력: <out_dir>/adapter/ (PEFT, 마지막) + adapter-ep<N>/ (에폭마다), tokenizer, train_log.json (손실·설정·뺀 샘플). **out_dir 은 git 제외 경로**로.
 
 필요: torch(CUDA), transformers, peft — btqa_sdk/python/btqa_distill/requirements.txt (별도 venv, Python ≥ 3.10).
 """
@@ -168,6 +168,10 @@ def train_lora(cfg: TrainConfig, train_path: Union[str, Path], val_path: Optiona
             model.train()
         log["epochs"].append({"epoch": epoch, "val_loss": val_loss, "seconds": round(time.time() - t0, 1)})
         print(json.dumps(log["epochs"][-1]), flush=True)
+        ep_dir = out / ("adapter-ep%d" % epoch)       # 에폭마다 저장 — 중간에 멈춰도 마지막 에폭은 남는다 (export --adapter 로 쓸 수 있다)
+        model.save_pretrained(str(ep_dir))
+        tok.save_pretrained(str(ep_dir))
+        (out / "train_log.json").write_text(json.dumps(log, ensure_ascii=False, indent=2), encoding="utf-8")
 
     model.save_pretrained(str(out / "adapter"))
     tok.save_pretrained(str(out / "adapter"))

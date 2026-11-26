@@ -19,6 +19,7 @@ AI_QA 첫 시도(2026-11-25)에서 DPO·RFT 가 모두 후퇴한 원인 — 포�
 - `relay_auto(rules)` + CLI `auto --rules 모듈:함수`: 교정 모드 자동 진행 — 게임 쪽 규칙이 학생 제안을 보고 승인 / 규칙 정답으로 교정 / `{"defer"}` 교사에게. 경고·학생 오류·같은 규칙 반복에서 멈춤
 - **단계 형식 `history=K` (선택, 기본 0 = 옛 형식 그대로)**: user 맨 앞에 `recent_actions` = 직전 행동 이전 K개 요약(tool·input·status·reason, 오래된 것부터). 직전 하나만 보면 A·B 번갈아·같은 행동 N번째 반복을 알 수 없다 (AI_QA r13). `actions.ActionHistory`·`history_entry`, `step_input(recent=)`, `PilotConfig(history=)`·`PilotRelay(history=)`·`run_suite(history=)`·`train_rft(history=)`·`build_onpolicy_pairs(history=)`, 옛 기록 → 새 형식 `record.with_history(records, K)` (판·step 순서, step 이 끊기면 비움) + `dataset`·`pairs` `history=`. CLI `--history` (play·relay·batch·eval·dataset·pairs·rft·pairs-onpolicy). 학습 K 와 실행 K 가 같아야 한다 — 평가 요약에 `history`
 - `suite.data_checks(records, suite)` + `dataset --suite S` → `stats.checks`: 평가 조건과 같은 판(누수)·판별 시작 상태 수 경고. 문서 `DISTILL_SDK.md` 5.1 DAgger 조건 (게임 무관)
+- `train`(SFT): 에폭마다 `adapter-ep<N>/` + `train_log.json` 저장 — 학습이 중간에 멈춰도 마지막 에폭 어댑터가 남는다
 - relay 반복 표시(`repeat_no_progress`)는 진척 키 **또는** 관찰 상태(창·대화 글)가 바뀌면 진척으로 본다 (대화 넘기기 같은 버튼 반복 오탐 수정)
 
 ## 0.4.x (미배포분) — 2026-11-25
