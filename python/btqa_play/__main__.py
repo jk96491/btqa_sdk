@@ -183,7 +183,8 @@ def cmd_auto(a: argparse.Namespace) -> int:
         else:
             print("승인 %s %s → %s %s" % (st["tool"], json.dumps(st.get("input"), ensure_ascii=False)[:60],
                                          res.get("status") or res.get("error"), res.get("reason") or ""), flush=True)
-    r = relay_auto(load_hook(a.rules), max_steps=a.max, port=a.port, max_same_rule=a.max_same_rule, on_step=show)
+    r = relay_auto(load_hook(a.rules), max_steps=a.max, port=a.port, max_same_rule=a.max_same_rule, on_step=show,
+                   let_fail=a.let_fail)
     print(json.dumps({k: r[k] for k in ("stop", "steps", "approved", "corrected", "rules")}, ensure_ascii=False))
     return 0
 
@@ -396,6 +397,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--rules", required=True, help="규칙 '모듈:함수' (step_input, 학생 제안) → None 또는 정답 dict")
     p.add_argument("--max", type=int, default=50)
     p.add_argument("--max-same-rule", type=int, default=3)
+    p.add_argument("--let-fail", type=int, default=0,
+                   help="교정한 단계에서 학생 제안을 N 단계 연속까지 그대로 실행 (정답만 기록) — 기록 속 실패에서 빠져나오는 예시")
     p.add_argument("--port", type=int, default=DEFAULT_RELAY_PORT)
     p.set_defaults(fn=cmd_auto)
 

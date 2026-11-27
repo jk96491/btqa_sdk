@@ -347,6 +347,41 @@ class RelayAutoTest(unittest.TestCase):
         self.assertEqual([x["target"]["tool"] for x in steps[:3]], ["step", "step", "step"])     # 교정 줄은 규칙의 정답
         self.assertEqual(steps[1]["student"]["tool"], "fail")                                    # 학생 제안은 남는다 (교정으로 셈)
 
+    def test_let_fail_runs_student_mistake_but_records_label(self):
+        from btqa_play.llm.json_action import JsonActionBackend
+        from btqa_play.relay import relay_auto
+        from tests.test_play_step import FakePost
+        g = CounterGame(goal=50)
+        outs = ['{"thought":"망한다","tool":"fail","input":{}}'] * 3 + ['{"thought":"쉰다","tool":"noop","input":{}}']
+        student = JsonActionBackend("s", post=FakePost(outs * 3))
+        with socket.socket() as s:
+            s.bind(("127.0.0.1", 0))
+            port = s.getsockname()[1]
+
+        def rules(user, st):
+            if st["tool"] == "fail":
+                return {"tool": "step", "input": {}, "thought": "실패 대신 올린다", "rule": "no_fail"}
+            return {"defer": "교사"}
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "auto.jsonl"
+            relay = PilotRelay(g.endpoint, port=port, out=d, record=path, student=student)
+            th = threading.Thread(target=relay.serve, daemon=True)
+            th.start()
+            for _ in range(200):
+                try:
+                    relay_step("intro", {}, port=port)
+                    break
+                except OSError:
+                    threading.Event().wait(0.02)
+            r = relay_auto(rules, max_steps=10, port=port, let_fail=2)
+            relay_step("finish", {"success": True, "summary": "ok", "blocked": None}, port=port, thought="끝")
+            th.join(5)
+            steps = read_steps(path)
+        g.close()
+        self.assertEqual([e["let_fail"] for e in r["log"]][:3], [True, True, False])  # 2번은 학생 실수 실행, 3번째는 정답 실행
+        self.assertEqual([x["target"]["tool"] for x in steps[:3]], ["step", "step", "step"])   # 기록은 모두 정답
+        self.assertEqual([e["result"]["tool"] for e in r["log"][:3]], ["fail", "fail", "step"])    # 게임에서 실제로 실행된 것
+
 
 if __name__ == "__main__":
     unittest.main()

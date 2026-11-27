@@ -294,15 +294,19 @@ RulesFn = Any
 
 
 def relay_auto(rules: RulesFn, max_steps: int = 50, port: int = DEFAULT_RELAY_PORT,
-               max_same_rule: int = 3, on_step: Any = None) -> Dict[str, Any]:
+               max_same_rule: int = 3, on_step: Any = None, let_fail: int = 0) -> Dict[str, Any]:
     """교정(DAgger) 모드 자동 진행: 학생 제안을 게임 쪽 규칙이 보고 — 문제 없으면 승인, 규칙 위반이면 규칙의 정답을 실행.
 
     멈추는 경우 (그다음은 교사가 본다): relay 경고(needs_review: 승인·교정한 행동이 실패하거나 진척 없이 반복),
     학생 제안 없음·형식 오류, 같은 규칙이 연속 max_same_rule 번, 판 끝, max_steps.
     규칙은 **입력(step_input)만** 보고 판단해야 한다 (학생이 배울 수 있게). 규칙이 판단할 수 없는 장면은 None 이 아니라
-    교사에게 맡기는 편이 낫다 — 규칙이 None 을 돌려주면 승인, {"defer": 이유} 면 아무것도 하지 않고 멈춘다 (교사 차례)."""
+    교사에게 맡기는 편이 낫다 — 규칙이 None 을 돌려주면 승인, {"defer": 이유} 면 아무것도 하지 않고 멈춘다 (교사 차례).
+
+    let_fail=N (>0): 규칙이 교정하면 정답은 기록하되 게임에는 **학생 제안을 실행**한다 (연속 N 단계까지, 그다음은 정답 실행).
+    바로 고치면 학생 입력의 기록(history)에 실패가 거의 남지 않아, "실패가 쌓인 뒤 빠져나오기"를 배울 예시가 없다
+    (기록 속 실패를 따라 하는 copycat). 이렇게 실행한 단계의 relay 경고는 의도한 실패라 멈추지 않는다."""
     log: List[Dict[str, Any]] = []
-    same, last_rule, stop = 0, None, "max_steps"
+    same, last_rule, stop, failing = 0, None, "max_steps", 0
     for _ in range(max_steps):
         view = json.loads(relay_step("view", {}, port=port))
         st = view.get("student") or {}
@@ -319,13 +323,16 @@ def relay_auto(rules: RulesFn, max_steps: int = 50, port: int = DEFAULT_RELAY_PO
         if fix:
             same = same + 1 if fix.get("rule") == last_rule else 1
             last_rule = fix.get("rule")
-            if same > max_same_rule:
+            if same > max_same_rule + let_fail:
                 stop = "같은 규칙 %s 연속 %d번" % (last_rule, same - 1)
                 break
-            r = json.loads(relay_step(fix["tool"], fix.get("input") or {}, port=port, thought=fix.get("thought") or None))
-            entry = {"kind": "corrected", "rule": fix.get("rule"), "student": st, "label": fix}
+            let = failing < let_fail and fix["tool"] != "finish" and st["tool"] != "finish"
+            failing = failing + 1 if let else 0
+            r = json.loads(relay_step(fix["tool"], fix.get("input") or {}, port=port, thought=fix.get("thought") or None,
+                                      execute="student" if let else None))
+            entry = {"kind": "corrected", "rule": fix.get("rule"), "student": st, "label": fix, "let_fail": let}
         else:
-            same, last_rule = 0, None
+            same, last_rule, failing = 0, None, 0
             r = json.loads(relay_step(st["tool"], st.get("input") or {}, port=port, thought=st.get("thought") or None,
                                       execute="student"))
             entry = {"kind": "approved", "student": st}
@@ -333,7 +340,7 @@ def relay_auto(rules: RulesFn, max_steps: int = 50, port: int = DEFAULT_RELAY_PO
         log.append(entry)
         if on_step:
             on_step(entry)
-        if r.get("warning"):
+        if r.get("warning") and not entry.get("let_fail"):
             stop = "경고 %s" % ",".join(r["warning"]["needs_review"])
             break
         if "step_input" not in r or (entry["kind"] == "approved" and st["tool"] == "finish") or \
